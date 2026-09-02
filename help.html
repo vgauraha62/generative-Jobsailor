@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JobSailor — Help</title><link rel="stylesheet" href="assets/app.css">
+<script src="assets/demo.js"></script></head>
+<body>
+<div class="navbar" role="navigation" aria-label="primary">
+  <div class="brand"><span class="dot"></span><span class="label">JOBSAILOR</span></div>
+  <nav><a href="dashboard.html" aria-label="Dashboard">Dashboard</a><a href="reports.html" aria-label="Reports">Reports</a><a href="chat.html" style="color: var(--purple);" aria-label="Chat / RAG">💬 Chat / RAG</a><a href="credentials.html" aria-label="Credentials">Credentials</a><a href="help.html" class="active" aria-label="Help">Help</a><a href="settings.html" aria-label="Settings">Settings</a>
+    <form method="post" action="login.html"><button class="logout-btn" type="submit" aria-label="Log out">Log out</button></form>
+  </nav>
+</div>
+<main>
+  <h1>Help Center</h1>
+  <input id="help-search" type="search" placeholder="Search help..." aria-label="Search help" style="width:100%;padding:10px;border-radius:6px;border:1px solid var(--border);background:var(--panel);color:var(--text);margin-bottom:16px">
+  <div id="faq-grid" style="display:grid;gap:12px">
+    <div class="card" data-keywords="run dashboard apply"><p class="label">How to run</p><p>Select types, choose Live or Dry, click Generate.</p></div>
+    <div class="card" data-keywords="report visit capture manual"><p class="label">Reports</p><p>Visit shows applied/skipped/failed per URL.</p></div>
+    <div class="card" data-keywords="curation threshold resume"><p class="label">Curation</p><p>Threshold 0.5 filters low match resumes.</p></div>
+    <div class="card" data-keywords="budget limit quota"><p class="label">Budget</p><p>Daily limit 19 Gemini calls, resets midnight per your locked timezone. See Dashboard JSON view for day/reset_at/next_reset_at.</p></div>
+    <div class="card" data-keywords="timezone locale asia kolkata utc"><p class="label">Timezone — Locked</p><p>Timezone once confirmed in Settings cannot be changed by you. Raise a ticket below — only admin can change.</p></div>
+    <div class="card" data-keywords="ticket timezone help support"><p class="label">Raise Timezone Ticket</p><p>Need timezone change? Submit below (admin will review).</p><select id="ticket-tz" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--panel-alt);color:var(--text);margin:8px 0"></select><input id="ticket-reason" placeholder="Reason (e.g. moved to New York)" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--panel-alt);color:var(--text)"><button id="ticket-btn" class="btn btn-primary" style="margin-top:8px" aria-label="Raise ticket">Raise Ticket</button><p id="ticket-msg" class="mono" style="font-size:0.85rem;color:var(--text-dim);margin-top:8px"></p></div>
+    <div class="card" data-keywords="password account delete export"><p class="label">Account</p><p>Settings → Security → Delete needs DELETE + password.</p></div>
+  </div>
+</main>
+<nav class="bottom-tabs" aria-label="primary mobile"><a href="dashboard.html">Dashboard</a><a href="reports.html">Reports</a><a href="help.html" class="active">Help</a><a href="settings.html">Settings</a></nav>
+<a href="mailto:support@jobsaillor.com?subject=Support&body=help" class="support-bubble" aria-label="Support">?</a>
+<script src="assets/app.js"></script>
+<script>
+const TZ_HELP=["Asia/Kolkata","UTC","Asia/Dubai","Asia/Singapore","Asia/Tokyo","Europe/London","Europe/Berlin","America/New_York","America/Chicago","America/Denver","America/Los_Angeles","Australia/Sydney"];
+const tsel=document.getElementById('ticket-tz'); if(tsel){ const det=Intl.DateTimeFormat().resolvedOptions().timeZone; let o=TZ_HELP; if(det&&!o.includes(det)) o=[det,...o]; tsel.innerHTML=o.map(t=>`<option value="${t}">${t}</option>`).join(""); tsel.value=det||"Asia/Kolkata"; document.getElementById('ticket-btn').onclick=async()=>{ const b=document.getElementById('ticket-btn'); setProcessing(b,true); try{ const res=await fetch('/api/timezone/ticket',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({requested_timezone:tsel.value,reason:document.getElementById('ticket-reason').value}),credentials:'same-origin'}); const j=await res.json(); if(!res.ok) throw new Error(j.detail||'Failed'); document.getElementById('ticket-msg').textContent=j.message||'Ticket raised'; showToast('Ticket raised'); }catch(e){ showToast(e.message, ()=>document.getElementById('ticket-btn').click()); } finally{ setProcessing(b,false);} } }
+const input=document.getElementById('help-search'), cards=[...document.querySelectorAll('#faq-grid .card')];
+input.addEventListener('input',()=>{
+  const q=input.value.toLowerCase().trim();
+  cards.forEach(c=>{
+    const kw=(c.dataset.keywords||'').toLowerCase(), text=c.textContent.toLowerCase();
+    const exact = q && (kw.includes(q) || text.includes(q));
+    const show = !q || exact || text.includes(q);
+    // exact keyword matches rank first via order
+    c.style.display= show ? '' : 'none';
+    c.style.order = exact ? -1 : 0;
+  });
+});
+</script>
+<script src="assets/chat-widget.js"></script>
+</body>
+</html>

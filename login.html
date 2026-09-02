@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JobSailor — Sign in</title>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #131a22;
+    --border: #232d38;
+    --text: #e4e9ee;
+    --text-dim: #7c8896;
+    --amber: #ffb454;
+    --green: #4fd1a5;
+    --red: #ff6b6b;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    background-image:
+      radial-gradient(circle at 15% 20%, rgba(79, 209, 165, 0.05), transparent 40%),
+      radial-gradient(circle at 85% 80%, rgba(255, 180, 84, 0.05), transparent 40%);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 20px;
+  }
+
+  .eyebrow {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    color: var(--green);
+    margin: 0 0 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .eyebrow .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+  }
+
+  .card {
+    position: relative;
+    width: 100%;
+    max-width: 380px;
+    padding: 34px 30px 30px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  /* Signature element: a status-rail on the card's leading edge, standing
+     in for the "everything's nominal" indicator lights on real control
+     gear. Static, not animated, unless the viewer allows motion. */
+  .card::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; bottom: 0;
+    width: 4px;
+    background: linear-gradient(180deg, var(--green), var(--amber));
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .card::before { animation: pulse 3.5s ease-in-out infinite; }
+  }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+
+  h1 {
+    font-size: 1.4rem;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+
+  p.sub {
+    color: var(--text-dim);
+    margin: 0 0 28px;
+    font-size: 0.9rem;
+  }
+
+  label {
+    display: block;
+    font-size: 0.78rem;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+    margin-bottom: 7px;
+  }
+
+  input {
+    width: 100%;
+    padding: 12px 14px;
+    margin-bottom: 18px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: #0e131a;
+    color: var(--text);
+    font-size: 1rem;
+    font-family: inherit;
+  }
+
+  input:focus {
+    outline: none;
+    border-color: var(--green);
+    box-shadow: 0 0 0 3px rgba(79, 209, 165, 0.15);
+  }
+
+  button {
+    width: 100%;
+    padding: 13px;
+    border-radius: 7px;
+    border: none;
+    background: var(--green);
+    color: #0b0f14;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  button:hover { filter: brightness(1.08); }
+  button:active { filter: brightness(0.92); }
+  button:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+  .error {
+    font-size: 0.85rem;
+    color: var(--red);
+    background: rgba(255, 107, 107, 0.08);
+    border: 1px solid rgba(255, 107, 107, 0.25);
+    padding: 10px 12px;
+    border-radius: 7px;
+    margin: 0 0 18px;
+  }
+</style>
+<script src="assets/demo.js"></script>
+</head>
+<body>
+  <a href="mailto:support@jobsaillor.com?subject=Support&body=login" class="support-bubble" aria-label="Support" style="position:fixed;bottom:20px;right:20px;width:48px;height:48px;border-radius:50%;background:var(--green);color:#0b0f14;display:flex;align-items:center;justify-content:center;text-decoration:none">?</a>
+  <div>
+    <p class="eyebrow"><span class="dot"></span>CONTROL PANEL // AUTH REQUIRED</p>
+    <div class="card">
+      <h1>JobSailor</h1>
+      <p class="sub">Sign in to view runs, reports, and settings.</p>
+      <div id="error-slot"></div>
+      <form method="post" action="dashboard.html">
+        <label for="username">Email or Username</label>
+        <input type="text" id="username" name="username" autocomplete="username" required autofocus aria-label="Email or Username" inputmode="email">
+        <div id="err-username" style="color:var(--red);font-size:0.78rem;min-height:14px" aria-live="polite"></div>
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" autocomplete="current-password" required aria-label="Password">
+        <div id="err-password" style="color:var(--red);font-size:0.78rem;min-height:14px" aria-live="polite"></div>
+        <button type="submit" aria-label="Log in">Log in</button>
+      </form>
+      <p style="text-align:center;margin-top:12px"><a href="signup.html" aria-label="Create account">Create account</a> · <a href="index.html" aria-label="Home">Home</a></p>
+    </div>
+  </div>
+<script>
+document.addEventListener('DOMContentLoaded',()=>{
+  const f=document.querySelector('form');
+  if(f){
+    f.addEventListener('submit',e=>{
+      e.preventDefault();
+      const btn=f.querySelector('button[type="submit"]');
+      if(btn) btn.textContent='Demo — redirecting...';
+      setTimeout(()=>location.href='dashboard.html',400);
+    });
+  }
+});
+</script>
+</body>
+</html>
