@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JobSailor — Create account</title><link rel="stylesheet" href="assets/app.css">
+<script src="assets/demo.js"></script>
+<style>
+body{display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg);color:var(--text);padding:20px}
+.card{max-width:400px;width:100%;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:28px}
+.social{opacity:0.5;pointer-events:none}
+.hint{font-size:0.75rem;color:var(--text-dim);margin-top:4px}
+.hint.ok{color:var(--green)} .hint.bad{color:var(--red)}
+.field-error{font-size:0.78rem;color:var(--red);margin-top:4px;min-height:16px}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Create account</h1><p class="page-sub">Start in one click. No trial. Free.</p>
+  <button class="btn social" aria-label="Sign in with Google (coming soon)" style="width:100%;margin-bottom:8px">Sign in with Google — Coming soon</button>
+  <button class="btn social" aria-label="Sign in with Apple (coming soon)" style="width:100%;margin-bottom:16px">Sign in with Apple — Coming soon</button>
+  <form id="signup-form" novalidate>
+    <label for="name">Name</label>
+    <input id="name" name="name" type="text" required autocomplete="name" aria-label="Name" style="width:100%;padding:10px;border-radius:6px;border:1px solid var(--border);background:var(--panel-alt);color:var(--text);margin-bottom:4px">
+    <div id="err-name" class="field-error" aria-live="polite"></div>
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" required autocomplete="email" aria-label="Email" style="width:100%;padding:10px;border-radius:6px;border:1px solid var(--border);background:var(--panel-alt);color:var(--text);margin-bottom:4px">
+    <div id="err-email" class="field-error" aria-live="polite"></div>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" required autocomplete="new-password" aria-label="Password" style="width:100%;padding:10px;border-radius:6px;border:1px solid var(--border);background:var(--panel-alt);color:var(--text);margin-bottom:4px">
+    <div id="pw-hints" class="hint" aria-live="polite">At least 8 characters, 1 number, 1 capital</div>
+    <div id="err-password" class="field-error" aria-live="polite"></div>
+    <button id="signup-btn" type="submit" class="btn btn-primary" aria-label="Create account" style="width:100%;margin-top:12px">Create account</button>
+  </form>
+  <p style="text-align:center;margin-top:12px"><a href="login.html" aria-label="Log in">Already have account? Log in</a></p>
+</div>
+<a href="mailto:support@jobsaillor.com?subject=Support&body=signup" class="support-bubble" aria-label="Support">?</a>
+<script>
+const pw=document.getElementById('password'), hints=document.getElementById('pw-hints');
+function validatePw(v){
+  const c1=v.length>=8, c2=/[0-9]/.test(v), c3=/[A-Z]/.test(v);
+  hints.textContent = (c1?'✓ 8 chars ':'✗ 8 chars ')+(c2?'✓ 1 number ':'✗ 1 number ')+(c3?'✓ 1 capital':'✗ 1 capital');
+  hints.className='hint '+(c1&&c2&&c3?'ok':'bad');
+  return c1&&c2&&c3;
+}
+pw.addEventListener('input',()=>validatePw(pw.value));
+document.getElementById('signup-form').addEventListener('submit', async e=>{
+  e.preventDefault();
+  const name=document.getElementById('name').value.trim(), email=document.getElementById('email').value.trim(), password=pw.value;
+  document.querySelectorAll('.field-error').forEach(el=>el.textContent='');
+  let ok=true;
+  if(!name){document.getElementById('err-name').textContent='Enter your name'; ok=false;}
+  if(!email||!email.includes('@')){document.getElementById('err-email').textContent='Enter a valid email'; ok=false;}
+  if(!validatePw(password)){document.getElementById('err-password').textContent='Use at least 8 characters, 1 number, 1 capital'; ok=false;}
+  if(!ok) return;
+  const btn=document.getElementById('signup-btn');
+  btn.disabled=true; const orig=btn.innerHTML; btn.innerHTML='Processing... <span class="spinner" aria-hidden="true"></span>';
+  try{
+    const res=await fetch('/api/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,email,password}),credentials:'same-origin'});
+    const j=await res.json().catch(()=>({}));
+    if(!res.ok) throw new Error(j.detail||'Failed');
+    window.location.href='dashboard.html';
+  }catch(err){ showToast(err.message, ()=>document.getElementById('signup-form').requestSubmit()); }
+  finally{ btn.disabled=false; btn.innerHTML=orig; }
+});
+function showToast(msg, retryFn){
+  let root=document.getElementById('toast-root'); if(!root){root=document.createElement('div'); root.id='toast-root'; root.setAttribute('aria-live','assertive'); document.body.appendChild(root);}
+  const t=document.createElement('div'); t.className='toast'; t.setAttribute('role','alert'); t.innerHTML=`<span class="msg">${msg}</span>`;
+  if(retryFn){ const b=document.createElement('button'); b.className='btn retry'; b.textContent='Retry'; b.onclick=()=>{t.remove(); retryFn();}; t.appendChild(b); }
+  const c=document.createElement('button'); c.textContent='×'; c.className='btn'; c.onclick=()=>t.remove(); t.appendChild(c); root.appendChild(t); setTimeout(()=>t.remove(),6000);
+}
+</script>
+<script>
+document.addEventListener('DOMContentLoaded',()=>{
+  const f=document.querySelector('form');
+  if(f){
+    f.addEventListener('submit',e=>{
+      e.preventDefault();
+      const btn=f.querySelector('button[type="submit"]');
+      if(btn) btn.textContent='Demo — redirecting...';
+      setTimeout(()=>location.href='dashboard.html',400);
+    });
+  }
+});
+</script>
+</body>
+</html>
