@@ -1,0 +1,36 @@
+.env
+__pycache__/
+venv/
+# run-state files
+visited.json
+gemini_budget.json
+reports/
+# hard files
+vaibhav_gauraha_7987458402.pdf
+candidate_profile.json
+SCALE_UP.md
+web/cookies.txt
+cookies.txt
+# session/cookie exports (never commit)
+cookies.txt
+web/cookies.txt
+resume_curation_budget.json
+resumes/curated/
+resumes/pdf/
+resumes/base.md
+resumes/active.json
+resumes/base_meta.json
+data/users/*/chats/
+data/users/*/rag.db
+# public-repo hardening: per-user everything, generated output, scratch
+data/
+graphify-out/
+.opencode/
+.pytest_cache/
+rag_budget.json
+config.json
+*.log
+chat_claude_query.txt
+dspy_analysis.txt
+*.pdf
+data/
