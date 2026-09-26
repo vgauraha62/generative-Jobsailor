@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JobSailor — Dashboard</title>
+<link rel="stylesheet" href="/static/assets/app.css?v=2">
+<script>try{if(localStorage.getItem('js_theme')!=='dark')document.documentElement.dataset.theme='light'}catch(e){}</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body class="has-sidebar">
+  <div class="navbar" role="navigation" aria-label="Primary">
+    <div class="brand"><span class="dot"></span><span class="label">JOBSAILOR</span></div>
+    <nav>
+      <a href="/dashboard" class="active" aria-label="Dashboard">Dashboard</a>
+      <a href="/reports" aria-label="Reports">Reports</a>
+      <a href="/chat" style="color: var(--purple);" aria-label="Chat / RAG">💬 Chat / RAG</a>
+      <a href="/credentials" aria-label="Credentials">Credentials</a>
+      <a href="/help" aria-label="Help">Help</a>
+      <a href="/settings" aria-label="Settings">Settings</a>
+      <form method="post" action="/logout"><button class="logout-btn" type="submit" aria-label="Log out">Log out</button></form>
+    </nav>
+  </div>
+  <main>
+    <h1>Dashboard</h1>
+    <p class="page-sub">Current run state, at a glance.</p>
+    <button id="jump-back" class="btn" style="display:none;position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:15" aria-label="Jump Back In">Jump Back In</button>
+     <div id="first-banner" class="alert success" style="display:none" role="alert">First task complete.</div>
+    <div id="sentinel-banner"></div>
+    <div id="tz-banner"></div>
+    <div id="limit-banner"></div>
+    <div class="card-grid" id="card-grid">
+      <div class="skeleton card" aria-hidden="true"></div>
+      <div class="skeleton card" aria-hidden="true"></div>
+      <div class="skeleton card" aria-hidden="true"></div>
+      <div class="skeleton card" aria-hidden="true"></div>
+    </div>
+    <div class="card-grid" id="ledger-grid"></div>
+    <div class="card" style="margin-top:16px">
+      <p class="label">RUN — SELECT TYPES & MODE (DRY RUN submits until 1st success) <span id="autosave-dot" class="autosave-dot" aria-label="saved"></span></p>
+      <div id="type-chips" style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0"></div>
+      <input id="free-types" placeholder="Other (comma: backend, golang)" aria-label="Other job types" style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--panel-alt);color:var(--text);margin-bottom:8px">
+      <div style="display:flex;gap:12px;align-items:center">
+        <span id="run-mode-pill" class="pill safe" aria-label="Mode DRY RUN"><span class="dot"></span>DRY RUN</span>
+        <label class="mono" style="font-size:0.8rem"><input type="checkbox" id="run-live-toggle" aria-label="Live toggle"> Live (submit)</label>
+        <button id="run-btn" class="btn btn-primary" style="margin-left:auto" aria-label="Generate">Generate</button>
+        <button id="stop-btn" class="btn" style="display:none;background:var(--red);color:#fff" aria-label="Stop">Stop</button>
+      </div>
+      <p id="run-status" class="mono" style="font-size:0.85rem;color:var(--text-dim);margin-top:8px"></p>
+      <pre id="run-log" class="raw-json" style="max-height:160px;display:none"></pre>
+    </div>
+    <div class="card" id="budget-json-card" style="margin-top:16px">
+      <p class="label">LLM BUDGET — JSON (resets at midnight per your timezone)</p>
+      <p id="budget-meta" class="mono" style="font-size:0.85rem;color:var(--text-dim)"></p>
+      <details open style="margin-top:8px"><summary class="mono" style="cursor:pointer">View raw JSON (form/royal chat/rag/curation)</summary><pre id="budget-json" class="raw-json" style="max-height:360px"></pre></details>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <p class="label">CURATION — THRESHOLD & BUDGET <span id="autosave-dot2" class="autosave-dot" aria-label="saved"></span></p>
+      <div style="display:flex;gap:12px;align-items:center;margin:8px 0">
+        <input id="threshold-slider" type="range" min="0" max="1" step="0.05" aria-label="Threshold" style="flex:1">
+        <span id="threshold-value" class="mono"></span>
+        <button id="threshold-save" class="btn" aria-label="Save threshold">Save</button>
+      </div>
+      <p id="curation-budget" class="mono" style="color:var(--text-dim)"></p>
+      <p id="active-resume" class="mono" style="font-size:0.85rem"></p>
+      <p id="rolling-5" class="mono" style="font-size:0.85rem"></p>
+    </div>
+    <div class="card-grid" id="charts-grid" style="margin-top:16px"></div>
+    <div class="card" id="screenshots-card" style="margin-top:16px">
+      <p class="label">SCREENSHOTS — 3 PER PAGE</p>
+      <div id="screenshots-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:10px"></div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:12px">
+        <button id="ss-prev" class="btn" aria-label="Previous">Previous</button>
+        <span id="ss-page" class="mono" style="color:var(--text-dim)"></span>
+        <button id="ss-next" class="btn" aria-label="Next">Next</button>
+        <span id="ss-total" class="mono" style="color:var(--text-dim);margin-left:auto"></span>
+      </div>
+    </div>
+    <div class="card" id="errors-card" style="margin-top:16px">
+      <p class="label">RECENT FAILURES — LAST 20</p>
+      <div id="errors-list" class="mono" style="font-size:0.82rem;display:flex;flex-direction:column;gap:8px;margin-top:10px"></div>
+    </div>
+  </main>
+  <nav class="bottom-tabs" aria-label="Primary mobile">
+    <a href="/dashboard" class="active" aria-label="Dashboard"><span>◉</span>Dashboard</a>
+    <a href="/reports" aria-label="Reports"><span>≡</span>Reports</a>
+    <a href="/help" aria-label="Help"><span>?</span>Help</a>
+    <a href="/settings" aria-label="Settings"><span>⚙</span>Settings</a>
+  </nav>
+  <a href="mailto:support@jobsaillor.com?subject=Support&body=dashboard" class="support-bubble" aria-label="Support">?</a>
+  <script src="/static/assets/theme.js"></script>
+  <script src="/static/assets/app.js"></script>
+  <script>
+    let ssPage=0, pollTimer=null, autosaveTimer=null, tooltipStep=0;
+    function showTooltip(target, text, step){
+      const r=target.getBoundingClientRect();
+      const t=document.createElement('div'); t.className='tooltip'; t.setAttribute('role','tooltip');
+      t.innerHTML=`<div class="step">${step}/3</div><div>${text}</div><div class="actions"><button class="btn" aria-label="Next">${step<3?'Next':'Done'}</button></div>`;
+      t.style.top=(r.bottom+8+window.scrollY)+'px'; t.style.left=r.left+'px';
+      document.body.appendChild(t);
+      t.querySelector('button').onclick=()=>{ t.remove(); if(step<3) nextTooltip(step+1); else localStorage.setItem('ftue_done','1'); };
+    }
+    function nextTooltip(step){
+      if(localStorage.getItem('ftue_done')) return;
+      tooltipStep=step;
+      if(step===1){ const el=document.getElementById('run-btn'); if(el) showTooltip(el,'Click Generate to start your first run',1); }
+      else if(step===2){ const el=document.getElementById('threshold-slider'); if(el) showTooltip(el,'Adjust curation threshold',2); }
+      else if(step===3){ const el=document.getElementById('type-chips'); if(el) showTooltip(el,'Pick job types',3); }
+    }
+    async function render(){
+      let status;
+      try{ status=await apiGet("/api/status"); }catch(e){
+        showToast(e.message, ()=>render()); return;
+      }
+      const banner=document.getElementById("sentinel-banner");
+      if(status.profile_sentinels.length>0){
+        banner.innerHTML=`<div class="alert warn"><div><strong>${status.profile_sentinels.length} profile field(s) need review</strong><br><span style="color:var(--text-dim)">${status.profile_sentinels.join(", ")}</span> — a --live run will refuse to start.</div></div>`;
+      } else banner.innerHTML="";
+      const tzb=document.getElementById("tz-banner");
+      if(status.timezone && !status.timezone.locked){
+        tzb.innerHTML=`<div class="alert warn" role="alert">⚠️ Timezone not locked — <strong>confirm your timezone (${status.timezone.name||'Asia/Kolkata'}) in <a href="/settings">Settings → LOCALE</a></strong>. Once confirmed it cannot be changed by you (admin via HELP ticket only).</div>`;
+      } else if(status.timezone && status.timezone.locked){ tzb.innerHTML=""; }
+      const meta=document.getElementById("budget-meta"), jpre=document.getElementById("budget-json");
+      if(status.budgets && meta && jpre){
+        const fmt=(s)=>s?new Date(s).toLocaleString():'—';
+        const b=status.budgets.gemini, c=status.budgets.curation, r=status.budgets.rag;
+        const o=status.budgets.openrouter;
+        const oTxt=o?` | OpenRouter: $${o.usage.toFixed(4)}/$${o.limit.toFixed(0)} (${Math.round(o.pct*100)}%)`:' | OpenRouter: —';
+        meta.textContent=`Day: ${b.day} | TZ: ${b.timezone} | Reset: ${fmt(b.reset_at)} | Next: ${fmt(b.next_reset_at)} | Calls: ${b.calls_used}/${b.daily_limit} gemini, ${c.calls_used}/${c.daily_limit} curation, ${r.calls_used}/${r.daily_limit} rag${oTxt}`;
+        jpre.textContent=JSON.stringify(status.budgets, null, 2);
+      }
+      const pct=status.budget.daily_limit>0?Math.min(100,Math.round((status.budget.calls_used/status.budget.daily_limit)*100)):0;
+      const barClass=pct>=100?"danger":pct>=85?"warn":"";
+      const runningLive=status.run_state&&status.run_state.running?status.run_state.live:null;
+      const effectiveLive=runningLive!==null?runningLive:status.dry_run_default===false;
+      const modePill=effectiveLive?`<span class="pill live" aria-label="Live"><span class="dot"></span>LIVE${runningLive!==null?' · RUNNING':''}</span>`:`<span class="pill safe" aria-label="Dry run"><span class="dot"></span>DRY RUN${runningLive!==null?' · RUNNING DRY':''}</span>`;
+      document.getElementById("card-grid").innerHTML=`
+        <div class="card"><p class="label">GEMINI BUDGET TODAY</p><p class="value mono">${fmtNumber(status.budget.calls_used)} <span style="color:var(--text-dim);font-size:1rem">/ ${fmtNumber(status.budget.daily_limit)}</span></p><div class="bar-track"><div class="bar-fill ${barClass}" style="width:${pct}%"></div></div>${status.gemini_health&&status.gemini_health.ok===false?`<p class="mono" style="color:var(--red);font-size:0.75rem">Gemini: ${status.gemini_health.error||'unavailable'}</p>`:''}</div>
+        <div class="card"><p class="label">EFFECTIVE MODE ${runningLive!==null?'(RUNNING)':'(DEFAULT)'}</p><p class="value">${modePill}</p></div>
+        <div class="card"><p class="label">URLS IN LEDGER</p><p class="value mono">${fmtNumber(status.ledger.total_urls)}</p></div>
+        <div class="card"><p class="label">CHANGED / UPLOADED — TODAY</p><p class="value mono">${status.curation_trace?status.curation_trace.changed_total:0} / ${status.curation_trace?status.curation_trace.uploaded_total:0}</p><p class="mono" style="color:var(--text-dim);font-size:0.8rem">over ${status.curation_trace?status.curation_trace.runs_with_curation:0} runs today${status.curation_trace&&status.curation_trace.day?` · ${status.curation_trace.day}`:''}</p></div>
+      `;
+      const limitBanner=document.getElementById("limit-banner");
+      if(pct>=85&&pct<100) limitBanner.innerHTML=`<div class="alert warn" role="alert">You have used ${pct}% of daily limit — consider upgrading. <span aria-hidden="true">⚠</span></div>`;
+      else if(pct>=100){ limitBanner.innerHTML=`<div class="alert warn" role="alert">Daily limit reached. <button class="btn" aria-label="Upgrade" onclick="window.location.href='/settings'">Upgrade</button></div>`; const rb=document.getElementById('run-btn'); if(rb) rb.disabled=true; }
+      else limitBanner.innerHTML="";
+      if(status.curation_budget){
+        document.getElementById("threshold-slider").value=status.curation_budget.threshold;
+        document.getElementById("threshold-value").textContent=status.curation_budget.threshold;
+        document.getElementById("curation-budget").textContent=`Curation ${status.curation_budget.calls_used}/${status.curation_budget.daily_limit} today`;
+      }
+      if(status.active_resume) document.getElementById("active-resume").textContent=`Active: ${status.active_resume.sha||"?"} ${status.active_resume.active_pdf||"no pdf yet"}`;
+      if(status.curation_trace){ const ct=status.curation_trace; document.getElementById("active-resume").textContent+=` | Changed ${ct.changed_total} / Uploaded ${ct.uploaded_total} today (over ${ct.runs_with_curation} runs${ct.day?` · ${ct.day}`:''})`; }
+      if(status.rolling_5) document.getElementById("rolling-5").textContent=`Rolling 5 runs: ${status.rolling_5.map(r=>r.run_id+":"+JSON.stringify(r.by_status)).join(" | ")}`;
+      // Admin view table
+      if(status.is_admin && status.admin_users){
+        const rows=status.admin_users.map(u=>`<tr><td>${u.email}</td><td>${u.name}</td><td>${u.ledger_total}</td><td>${u.budget}</td><td>${u.curation}</td><td>${u.rag||''}</td><td>${u.timezone||''}${u.timezone_locked?' 🔒':''}</td><td><select class="tz-admin" data-uid="${u.id}" style="padding:4px;border-radius:4px;background:var(--panel-alt);color:var(--text);border:1px solid var(--border)"><option value="">--tz--</option>${["Asia/Kolkata","UTC","America/New_York","Europe/London"].map(t=>`<option value="${t}" ${t===u.timezone?'selected':''}>${t}</option>`).join("")}</select> <button class="btn tz-save" data-uid="${u.id}" aria-label="Save TZ">Save</button></td><td><a href="/reports?user=${u.id}" class="btn" aria-label="View">View</a></td></tr>`).join("");
+        document.getElementById("ledger-grid").innerHTML=`<div class="card" style="grid-column:1/-1"><p class="label">USERS — ADMIN</p><table><thead><tr><th>Email</th><th>Name</th><th>Runs</th><th>Budget</th><th>Curation</th><th>RAG</th><th>Timezone</th><th>Admin TZ Edit</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan=9>No users</td></tr>'}</tbody></table></div>`;
+        document.querySelectorAll('.tz-save').forEach(btn=>btn.onclick=async()=>{ const uid=btn.dataset.uid; const sel=document.querySelector(`.tz-admin[data-uid="${uid}"]`); const tz=sel.value; if(!tz) return showToast('Pick timezone'); setProcessing(btn,true); try{ const res=await fetch(`/api/admin/users/${uid}/timezone`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({timezone:tz}),credentials:'same-origin'}); const j=await res.json(); if(!res.ok) throw new Error(j.detail||'Failed'); showToast('Updated '+tz); render(); }catch(e){ showToast(e.message);} finally{ setProcessing(btn,false);} });
+      } else {
+        const statuses=Object.entries(status.ledger.by_status);
+        if(status.needs_credentials){
+          document.getElementById("ledger-grid").innerHTML=`<div class="empty-state" style="grid-column:1/-1"><div class="graphic" aria-hidden="true">⚙</div><p>Configure your credentials to start.</p><a href="/credentials" class="btn btn-primary" aria-label="Credentials">Credentials</a></div>`;
+        } else if(statuses.length===0){
+          document.getElementById("ledger-grid").innerHTML=`<div class="empty-state" style="grid-column:1/-1"><div class="graphic" aria-hidden="true">◉</div><p>Start your first run to see results</p><button class="btn btn-primary" aria-label="Generate" onclick="document.getElementById('run-btn').scrollIntoView({behavior:'smooth'})">Generate</button></div>`;
+        } else document.getElementById("ledger-grid").innerHTML=statuses.map(([s,count])=>`<div class="card"><p class="label">${s.toUpperCase()}</p><p class="value mono">${fmtNumber(count)}</p></div>`).join("");
+      }
+      renderCharts(status); loadScreenshots(); loadErrors(); initRunCard(status); pollRunStatus();
+      // FTUE tooltips once
+      if(!localStorage.getItem('ftue_done') && statuses.length===0) setTimeout(()=>nextTooltip(1),800);
+      // Jump Back In
+      const lastDraft=localStorage.getItem('last_run_draft');
+      const jump=document.getElementById('jump-back');
+      if(lastDraft && !status.run_state.running){ jump.style.display='block'; jump.onclick=()=>{ const d=JSON.parse(lastDraft); document.getElementById('free-types').value=d.free||''; jump.style.display='none'; }; }
+      // First task banner
+      if(localStorage.getItem('firstRunDone')) document.getElementById('first-banner').style.display='block';
+    }
+    function chartCard(title,canvasId){ return `<div class="card"><p class="label">${title}</p><canvas id="${canvasId}" height="160"></canvas><button class="btn" style="margin-top:8px" onclick="downloadChart('${canvasId}','chart-${canvasId}')" aria-label="Download chart">Download PNG</button></div>`; }
+    function downloadChart(id,name){ const c=document.getElementById(id); const a=document.createElement('a'); a.download=name+'-'+new Date().toISOString().slice(0,19).replace(/:/g,'-')+'.png'; a.href=c.toDataURL('image/png'); a.click(); }
+    function renderCharts(status){
+      const last=status.rolling_5&&status.rolling_5[0]?status.rolling_5[0].summary:null;
+      const grid=document.getElementById("charts-grid");
+      grid.innerHTML=chartCard("HISTOGRAM — CURATION SCORE","ch-hist")+chartCard("FUNNEL — BY STATUS","ch-funnel")+chartCard("UPLOAD STATUS","ch-upload")+chartCard("ROLLING 5 — APPLIED RATE","ch-trend")+chartCard("BY JOB TYPE","ch-type")+chartCard("BUDGETS","ch-budget");
+      const css=getComputedStyle(document.documentElement);
+      const green=css.getPropertyValue('--green').trim()||'#4fd1a5', amber=css.getPropertyValue('--amber').trim()||'#ffb454', red=css.getPropertyValue('--red').trim()||'#ff6b6b', dim=css.getPropertyValue('--text-dim').trim()||'#7c8896', border=css.getPropertyValue('--border').trim()||'#232d38';
+      Chart.defaults.color=dim; Chart.defaults.borderColor=border;
+      if(last&&last.curation_score_histogram) new Chart(document.getElementById('ch-hist'),{type:'bar',data:{labels:Object.keys(last.curation_score_histogram),datasets:[{data:Object.values(last.curation_score_histogram),backgroundColor:green}]},options:{plugins:{legend:{display:false}},scales:{x:{grid:{display:false}},y:{grid:{color:border}}}}});
+      if(last&&last.by_status) new Chart(document.getElementById('ch-funnel'),{type:'doughnut',data:{labels:Object.keys(last.by_status),datasets:[{data:Object.values(last.by_status),backgroundColor:[green,amber,red,dim]}]},options:{plugins:{legend:{position:'bottom'}}}});
+      if(last&&last.by_upload_status) new Chart(document.getElementById('ch-upload'),{type:'doughnut',data:{labels:Object.keys(last.by_upload_status),datasets:[{data:Object.values(last.by_upload_status),backgroundColor:[green,dim,amber]}]},options:{plugins:{legend:{position:'bottom'}}}});
+      if(status.rolling_5&&status.rolling_5.length){ const labels=status.rolling_5.map(r=>r.run_id.slice(-5)).reverse(); const curated=status.rolling_5.map(r=>r.summary.applied_rate_curated||0).reverse(); const kept=status.rolling_5.map(r=>r.summary.applied_rate_kept||0).reverse(); new Chart(document.getElementById('ch-trend'),{type:'line',data:{labels,datasets:[{label:'curated',data:curated,borderColor:green,tension:0.3},{label:'kept',data:kept,borderColor:amber,tension:0.3}]},options:{plugins:{legend:{position:'bottom'}},scales:{y:{grid:{color:border}}}}}); }
+      if(last&&last.by_job_type){ const types=Object.keys(last.by_job_type); const applied=types.map(t=>last.by_job_type[t].applied||0); const failed=types.map(t=>last.by_job_type[t].failed||0); new Chart(document.getElementById('ch-type'),{type:'bar',data:{labels:types,datasets:[{label:'applied',data:applied,backgroundColor:green},{label:'failed',data:failed,backgroundColor:red}]},options:{plugins:{legend:{position:'bottom'}},scales:{x:{stacked:true,grid:{display:false}},y:{stacked:true,grid:{color:border}}}}}); }
+      new Chart(document.getElementById('ch-budget'),{type:'bar',data:{labels:['Gemini','Curation'],datasets:[{label:'used',data:[status.budget.calls_used,status.curation_budget.calls_used],backgroundColor:[green,amber]},{label:'limit',data:[status.budget.daily_limit,status.curation_budget.daily_limit],backgroundColor:dim}]},options:{plugins:{legend:{position:'bottom'}},scales:{y:{grid:{color:border}}}}});
+    }
+    async function loadScreenshots(){
+      try{ const data=await apiGet(`/api/screenshots?page=${ssPage}&limit=3`); const grid=document.getElementById("screenshots-grid");
+      grid.innerHTML=data.items.map(it=>`<a href="/api/screenshots/file/${it.file}" target="_blank" aria-label="Screenshot ${it.file}"><img src="/api/screenshots/file/${it.file}" style="width:100%;border-radius:8px;border:1px solid var(--border);max-height:160px;object-fit:cover" alt="screenshot ${it.file}"><p class="mono" style="font-size:0.7rem;color:var(--text-dim)">${it.file}</p></a>`).join("")||`<p class="mono" style="color:var(--text-dim)">No screenshots yet</p>`;
+      document.getElementById("ss-page").textContent=`Page ${data.page+1}/${data.pages}`; document.getElementById("ss-total").textContent=`${data.total} total (kept all)`;
+      document.getElementById("ss-prev").disabled=data.page===0; document.getElementById("ss-next").disabled=data.page+1>=data.pages;
+      }catch(e){ showToast(e.message, loadScreenshots); }
+    }
+    async function loadErrors(){
+      try{ const data=await apiGet(`/api/errors?limit=20`); const list=document.getElementById("errors-list");
+      list.innerHTML=data.errors.map(e=>`<div><span style="color:var(--red)">${escapeHtml(e.error_type||"failed")}</span> <span style="color:var(--text-dim)">${escapeHtml(e.at||"")} ${escapeHtml(e.job_type||"")}</span><br>${escapeHtml(e.reason||"")} <span style="color:var(--text-dim)">${escapeHtml((e.url||"").slice(0,80))}</span></div>`).join("")||`<p style="color:var(--text-dim)">No failures recorded</p>`;
+      }catch(e){ showToast(e.message, loadErrors); }
+    }
+    function syncModePill(live){ const pill=document.getElementById("run-mode-pill"); pill.className=live?"pill live":"pill safe"; pill.innerHTML=live?'<span class="dot"></span>LIVE':'<span class="dot"></span>DRY RUN'; }
+    async function initRunCard(status){
+      const cfg=await apiGet("/api/config");
+      const slugs=(cfg.search&&cfg.search.slugs)||[]; const maxTypes=(cfg.search&&cfg.search.max_run_types)||3;
+      const chips=document.getElementById("type-chips");
+      chips.innerHTML=slugs.map(s=>{ const short=s.replace("-jobs",""); return `<label class="badge" style="cursor:pointer"><input type="checkbox" value="${short}" checked aria-label="${short}"> ${short}</label>`; }).join("");
+      const liveToggle=document.getElementById("run-live-toggle");
+      const stored=localStorage.getItem("jobsailor_live_toggle");
+      let initialLive=stored!==null?stored==="true":!status.dry_run_default;
+      if(status.run_state&&status.run_state.running&&typeof status.run_state.live==="boolean") initialLive=status.run_state.live;
+      liveToggle.checked=initialLive; syncModePill(initialLive);
+      liveToggle.onchange=()=>{ localStorage.setItem("jobsailor_live_toggle", liveToggle.checked); localStorage.setItem('last_run_draft', JSON.stringify({free:document.getElementById('free-types').value})); syncModePill(liveToggle.checked); };
+      document.getElementById('free-types').addEventListener('input', ()=> localStorage.setItem('last_run_draft', JSON.stringify({free:document.getElementById('free-types').value})));
+      // autosave every 3s
+      if(autosaveTimer) clearInterval(autosaveTimer);
+      autosaveTimer=setInterval(async()=>{
+        const v=parseFloat(document.getElementById("threshold-slider").value);
+        if(isNaN(v)) return;
+        try{
+          await fetch("/api/curation/threshold",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({threshold:v})});
+          const dot=document.getElementById("autosave-dot"); dot.classList.add("saved"); setTimeout(()=>dot.classList.remove("saved"),1500);
+          document.getElementById("autosave-dot2").classList.add("saved"); setTimeout(()=>document.getElementById("autosave-dot2").classList.remove("saved"),1500);
+        }catch(e){ showToast("Autosave failed: "+e.message, ()=>{}); }
+      },3000);
+      document.getElementById("run-btn").onclick=async()=>{
+        const checked=[...chips.querySelectorAll("input:checked")].map(i=>i.value);
+        const free=document.getElementById('free-types').value.split(",").map(s=>s.trim()).filter(Boolean);
+        const types=[...new Set([...checked,...free])];  // ponytail: chip + free-typed same slug ran twice
+        if(types.length===0) { showToast("Pick at least 1 type", null); return; }
+        if(types.length>maxTypes) { showToast("Max "+maxTypes+" types", null); return; }
+        const live=liveToggle.checked;
+        if(live && !confirm(`Run LIVE will submit forms for ${types.join(", ")} — continue?`)) return;
+        const btn=document.getElementById("run-btn"); setProcessing(btn,true);
+        document.getElementById("run-status").textContent="Starting...";
+        try{
+          const res=await fetch("/api/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({types,live})});
+          const j=await res.json();
+          if(!res.ok) throw new Error(j.detail||res.status);
+          document.getElementById("run-status").textContent=`Running ${j.run_id} (${j.types.join(",")}) live=${j.live}`;
+          // first task complete check
+          if(!localStorage.getItem('firstRunDone')){
+            localStorage.setItem('firstRunDone','1');
+            triggerConfetti();
+            document.getElementById('first-banner').style.display='block';
+            setTimeout(()=>document.getElementById('first-banner').style.display='none',10000);
+          }
+          pollRunStatus();
+        }catch(e){ showToast(e.message, ()=>document.getElementById("run-btn").click()); document.getElementById("run-status").textContent="Error: "+e.message; }
+        finally{ setProcessing(btn,false); }
+      };
+      document.getElementById("stop-btn").onclick=async()=>{
+        const btn=document.getElementById("stop-btn"); setProcessing(btn,true);
+        document.getElementById("run-status").textContent="Stopping...";
+        try{
+          const res=await fetch("/api/run/stop",{method:"POST"});
+          const j=await res.json(); if(!res.ok) throw new Error(j.detail||res.status);
+          document.getElementById("run-status").textContent=`Stopped ${j.run_id||""}`;
+        }catch(e){ showToast(e.message, ()=>document.getElementById("stop-btn").click()); document.getElementById("run-status").textContent="Stop error: "+e.message; }
+        pollRunStatus(); setProcessing(btn,false);
+      };
+      document.getElementById("threshold-save").onclick=async()=>{
+        const btn=document.getElementById("threshold-save"); setProcessing(btn,true);
+        try{
+          const v=parseFloat(document.getElementById("threshold-slider").value);
+          const res=await fetch("/api/curation/threshold",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({threshold:v})});
+          if(!res.ok) throw new Error("Failed");
+          showToast("Threshold saved to "+v, null); document.getElementById("autosave-dot").classList.add("saved");
+        }catch(e){ showToast(e.message, ()=>document.getElementById("threshold-save").click()); }
+        finally{ setProcessing(btn,false); }
+      };
+      document.getElementById("threshold-slider").oninput=e=>document.getElementById("threshold-value").textContent=e.target.value;
+    }
+    async function pollRunStatus(){
+      try{
+        const s=await apiGet("/api/run/status");
+        const el=document.getElementById("run-status"), log=document.getElementById("run-log"), runBtn=document.getElementById("run-btn"), stopBtn=document.getElementById("stop-btn"), liveToggle=document.getElementById("run-live-toggle");
+        if(s.running){
+          el.textContent=`Running ${s.lock.run_id} ${s.lock.types.join(",")} live=${s.lock.live} ${s.lock.live?'(LIVE submitting)':'(DRY RUN)'}`;
+          if(s.log_tail){ log.style.display="block"; log.textContent=s.log_tail; }
+          if(runBtn) runBtn.style.display="none";
+          if(stopBtn) stopBtn.style.display="inline-block";
+          if(liveToggle){ liveToggle.checked=!!s.lock.live; syncModePill(!!s.lock.live); liveToggle.disabled=true; }
+          if(!pollTimer) pollTimer=setInterval(pollRunStatus,2000);
+        } else {
+          if(s.last){
+            const tag=s.last.stopped?"Stopped":"Done"; const liveStr=s.last.live?"LIVE":"DRY RUN";
+            el.textContent=`${tag} ${s.last.run_id} exit ${s.last.exit_code} types ${s.last.types.join(",")} live=${s.last.live} (${liveStr})`;
+            if(s.log_tail){ log.style.display="block"; log.textContent=s.log_tail; } else log.style.display="block";
+          } else { el.textContent=""; log.style.display="none"; }
+          if(runBtn) runBtn.style.display="inline-block";
+          if(stopBtn) stopBtn.style.display="none";
+          if(liveToggle) liveToggle.disabled=false;
+          if(pollTimer){ clearInterval(pollTimer); pollTimer=null; }
+        }
+      }catch(e){ showToast(e.message, pollRunStatus); }
+    }
+    document.getElementById("ss-prev").onclick=()=>{ if(ssPage>0){ ssPage--; loadScreenshots(); }};
+    document.getElementById("ss-next").onclick=()=>{ ssPage++; loadScreenshots(); };
+    render();
+  </script>
+  <script src="/static/assets/chat-widget.js"></script>
+</body>
+</html>

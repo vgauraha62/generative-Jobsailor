@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JobSailor — Reports</title>
+<link rel="stylesheet" href="/static/assets/app.css?v=2">
+<script>try{if(localStorage.getItem('js_theme')!=='dark')document.documentElement.dataset.theme='light'}catch(e){}</script>
+</head>
+<body class="has-sidebar">
+  <div class="navbar" role="navigation" aria-label="Primary">
+    <div class="brand"><span class="dot"></span><span class="label">JOBSAILOR</span></div>
+    <nav>
+      <a href="/dashboard" aria-label="Dashboard">Dashboard</a>
+      <a href="/reports" class="active" aria-label="Reports">Reports</a>
+      <a href="/chat" style="color: var(--purple);" aria-label="Chat / RAG">💬 Chat / RAG</a>
+      <a href="/credentials" aria-label="Credentials">Credentials</a>
+      <a href="/help" aria-label="Help">Help</a>
+      <a href="/settings" aria-label="Settings">Settings</a>
+      <form method="post" action="/logout"><button class="logout-btn" type="submit" aria-label="Log out">Log out</button></form>
+    </nav>
+  </div>
+
+  <main>
+    <h1>Reports</h1>
+    <p class="page-sub">Every capture, visit, and manual-review run, newest first.</p>
+
+    <div id="table-wrap">
+      <table id="reports-table" style="display:none">
+        <thead>
+          <tr><th>Run</th><th>Kind</th><th>When</th></tr>
+        </thead>
+        <tbody id="reports-tbody"></tbody>
+      </table>
+      <div id="empty" class="empty-state" style="display:none">
+        <div class="graphic" aria-hidden="true">≡</div>
+        <p>Start your first run to see reports</p>
+        <a href="/dashboard" class="btn btn-primary" aria-label="Generate">Generate</a>
+      </div>
+      <div id="skeleton-wrap" style="display:none"><div class="skeleton row"></div><div class="skeleton row"></div><div class="skeleton row"></div></div>
+    </div>
+
+    <div class="detail-panel" id="detail-panel">
+      <h2 id="detail-title"></h2>
+      <div id="detail-body"></div>
+      <details>
+        <summary>View raw JSON</summary>
+        <div id="detail-raw"></div>
+      </details>
+    </div>
+  </main>
+
+  <script src="/static/assets/theme.js"></script>
+  <script src="/static/assets/app.js"></script>
+  <script>
+    async function loadList() {
+      document.getElementById("skeleton-wrap").style.display = "block";
+      let data;
+      try {
+        data = await apiGet("/api/reports");
+      } catch (e) {
+        document.getElementById("empty").style.display = "block";
+        document.getElementById("skeleton-wrap").style.display = "none";
+        showToast("Error loading reports: "+e.message, loadList);
+        return;
+      }
+      document.getElementById("skeleton-wrap").style.display = "none";
+
+      const reports = data.reports;
+      if (reports.length === 0) {
+        document.getElementById("empty").style.display = "block";
+        return;
+      }
+
+      document.getElementById("reports-table").style.display = "table";
+      const tbody = document.getElementById("reports-tbody");
+      tbody.innerHTML = reports.map(r => `
+        <tr data-kind="${r.kind}" data-run-id="${r.run_id}">
+          <td data-label="Run">${r.run_id}</td>
+          <td data-label="Kind">${kindBadge(r.kind)}</td>
+          <td data-label="When">${fmtTimestamp(r.modified_at)}</td>
+        </tr>
+      `).join("");
+
+      tbody.querySelectorAll("tr").forEach(row => {
+        row.addEventListener("click", () => openDetail(row.dataset.kind, row.dataset.runId));
+      });
+    }
+
+    async function openDetail(kind, runId) {
+      const panel = document.getElementById("detail-panel");
+      const body = document.getElementById("detail-body");
+      const raw = document.getElementById("detail-raw");
+      document.getElementById("detail-title").textContent = `${kind}_${runId}`;
+      body.innerHTML = "Loading…";
+      panel.classList.add("open");
+      panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+
+      let report;
+      try {
+        report = await apiGet(`/api/reports/${kind}/${runId}`);
+      } catch (e) {
+        body.innerHTML = `<p style="color:var(--red)">${e.message}</p>`;
+        return;
+      }
+
+      body.innerHTML = kind === "capture" ? renderCapture(report)
+        : kind === "manual" ? renderManual(report)
+        : renderVisit(report);
+      raw.innerHTML = rawJson(report);
+    }
+
+    function renderCapture(report) {
+      if (!report.job_types) return `<p style="color:var(--text-dim)">Unexpected shape - see raw JSON below.</p>`;
+      const rows = Object.entries(report.job_types).map(([slug, d]) => `
+        <tr>
+          <td data-label="Type">${slug}</td>
+          <td data-label="Pages">${d.pages_scraped ?? "—"}</td>
+          <td data-label="Stopped">${d.pages_stopped_reason ?? "—"}</td>
+          <td data-label="Captured">${fmtNumber(d.total_links_captured ?? 0)}</td>
+          <td data-label="New">${fmtNumber(d.net_new_actionable_urls ?? 0)}</td>
+        </tr>
+      `).join("");
+      return `
+        <table>
+          <thead><tr><th>Type</th><th>Pages</th><th>Stopped</th><th>Captured</th><th>New</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    function renderVisit(report) {
+      if (!report.summary) return `<p style="color:var(--text-dim)">Unexpected shape - see raw JSON below.</p>`;
+      const byStatus = Object.entries(report.summary.by_status || {})
+        .map(([s, c]) => `${statusBadge(s)} <span class="mono" style="color:var(--text-dim)">${c}</span>`)
+        .join("  ");
+      const curation = report.summary ? `Curated ${report.summary.curation_performed||0} · Kept ${report.summary.curation_skipped_high_score||0} · Avg score ${(report.summary.avg_curation_score||0).toFixed(2)} · Curated rate ${report.summary.applied_rate_curated||0} vs Kept ${report.summary.applied_rate_kept||0} (Δ ${report.summary.applied_rate_delta_curated_vs_kept||0})` : "";
+      const upload = report.summary && report.summary.by_upload_status ? Object.entries(report.summary.by_upload_status).map(([k,v])=>`${k}:${v}`).join(" ") : "";
+      const resultRows = (report.results || []).slice(0, 50).map(r => `
+        <tr>
+          <td data-label="URL" style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.url}</td>
+          <td data-label="Type">${r.job_type ?? "—"}</td>
+          <td data-label="Status">${statusBadge(r.status)}</td>
+          <td data-label="Cur">${r.curation_score!=null?r.curation_score:"—"} ${r.curation_performed?"✦":""}</td>
+          <td data-label="Up">${r.upload_status||"—"}</td>
+          <td data-label="Shot">${r.screenshot ? `<a href="/api/screenshots/file/${r.screenshot.split('/').pop()}" target="_blank">📷</a>` : "—"}</td>
+          <td data-label="Reason" style="color:var(--text-dim)">${r.reason ?? "—"}</td>
+        </tr>
+      `).join("");
+      return `
+        <p style="margin:0 0 8px">${byStatus}</p>
+        <p style="margin:0 0 8px;color:var(--text-dim);font-size:0.85rem">${curation}</p>
+        <p style="margin:0 0 12px;color:var(--text-dim);font-size:0.8rem">${upload} · histogram ${JSON.stringify(report.summary.curation_score_histogram||{})}</p>
+        <table>
+          <thead><tr><th>URL</th><th>Type</th><th>Status</th><th>Cur</th><th>Up</th><th>Shot</th><th>Reason</th></tr></thead>
+          <tbody>${resultRows}</tbody>
+        </table>
+        ${(report.results || []).length > 50 ? `<p style="color:var(--text-dim);font-size:0.8rem;margin-top:10px">Showing first 50 of ${report.results.length} — see raw JSON for the rest.</p>` : ""}
+      `;
+    }
+
+    function renderManual(report) {
+      const byStatus = Object.entries(report.summary || {})
+        .map(([s, c]) => `${statusBadge(s)} <span class="mono" style="color:var(--text-dim)">${c}</span>`)
+        .join("  ");
+      const rows = (report.items || []).map(it => `
+        <tr>
+          <td data-label="URL" style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            <a href="${it.url}" target="_blank" rel="noopener" title="${it.url}">${it.url}</a>
+          </td>
+          <td data-label="Type">${it.job_type ?? "—"}</td>
+          <td data-label="Status">${statusBadge(it.status)}</td>
+          <td data-label="Reason" style="color:var(--text-dim)">${it.reason ?? "—"}</td>
+        </tr>
+      `).join("");
+      return `
+        <p style="margin:0 0 16px">${byStatus || `<span class="badge skipped">0</span>`} — <span style="color:var(--text-dim)">click a URL to open it in a new tab</span></p>
+        <table>
+          <thead><tr><th>URL</th><th>Type</th><th>Status</th><th>Reason</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        ${(report.items || []).length === 0 ? `<p style="color:var(--text-dim)">Nothing to review.</p>` : ""}
+      `;
+    }
+
+    loadList();
+  </script>
+  <nav class="bottom-tabs" aria-label="Primary mobile"><a href="/dashboard" aria-label="Dashboard"><span>◉</span>Dashboard</a><a href="/reports" class="active" aria-label="Reports"><span>≡</span>Reports</a><a href="/help" aria-label="Help"><span>?</span>Help</a><a href="/settings" aria-label="Settings"><span>⚙</span>Settings</a></nav>
+  <a href="mailto:support@jobsaillor.com?subject=Support&body=reports" class="support-bubble" aria-label="Support">?</a>
+  <script src="/static/assets/app.js"></script>
+  <script src="/static/assets/chat-widget.js"></script>
+</body>
+</html>

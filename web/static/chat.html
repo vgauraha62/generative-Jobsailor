@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JobSailor — Royal RAG Assistant</title>
+<link rel="stylesheet" href="/static/assets/app.css?v=2">
+<script>try{if(localStorage.getItem('js_theme')!=='dark')document.documentElement.dataset.theme='light'}catch(e){}</script>
+<style>
+  /* Royal Palette Styles */
+  :root {
+    --purple: #a855f7;
+    --purple-glow: rgba(168, 85, 247, 0.4);
+    --purple-dark: #7e22ce;
+    --purple-bg: rgba(168, 85, 247, 0.08);
+    --royal-gradient: linear-gradient(135deg, #a855f7 0%, #4fd1a5 100%);
+  }
+
+  .chat-container {
+    max-width: 960px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 75px);
+    padding: 16px 20px 20px;
+  }
+
+  .chat-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 14px;
+  }
+
+  .chat-title-group {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .royal-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--purple-bg);
+    border: 1px solid var(--purple-glow);
+    color: var(--purple);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .royal-badge .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--purple);
+    box-shadow: 0 0 8px var(--purple);
+  }
+
+  .rag-stats-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    background: var(--panel-alt);
+    padding: 4px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .btn-royal {
+    background: var(--panel);
+    border: 1px solid var(--purple-glow);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .btn-royal:hover {
+    border-color: var(--purple);
+    box-shadow: 0 0 12px var(--purple-glow);
+    background: var(--purple-bg);
+    color: #fff;
+  }
+
+  /* Chat Messages Stream */
+  .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    margin-bottom: 14px;
+    scroll-behavior: smooth;
+  }
+
+  .chat-messages::-webkit-scrollbar {
+    width: 6px;
+  }
+  .chat-messages::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+  }
+
+  .msg-row {
+    display: flex;
+    gap: 12px;
+    max-width: 88%;
+    animation: fadeIn 0.2s ease-out;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .msg-row.user {
+    align-self: flex-end;
+    flex-direction: row-reverse;
+  }
+
+  .msg-row.assistant {
+    align-self: flex-start;
+  }
+
+  .avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    font-weight: bold;
+    flex-shrink: 0;
+  }
+
+  .avatar.user {
+    background: var(--panel-alt);
+    border: 1px solid var(--green);
+    color: var(--green);
+  }
+
+  .avatar.assistant {
+    background: linear-gradient(135deg, #7e22ce 0%, #131a22 100%);
+    border: 1px solid var(--purple);
+    box-shadow: 0 0 10px var(--purple-glow);
+    color: #fff;
+  }
+
+  .msg-bubble {
+    padding: 12px 16px;
+    border-radius: 10px;
+    font-size: 0.92rem;
+    line-height: 1.55;
+    word-break: break-word;
+  }
+
+  .msg-row.user .msg-bubble {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-top-right-radius: 2px;
+  }
+
+  .msg-row.assistant .msg-bubble {
+    background: linear-gradient(180deg, rgba(26, 19, 36, 0.7) 0%, var(--panel) 100%);
+    border: 1px solid rgba(168, 85, 247, 0.35);
+    color: var(--text);
+    border-top-left-radius: 2px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  }
+
+  /* RAG Inspector & Citation Details */
+  .rag-inspector {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(168, 85, 247, 0.2);
+    font-size: 0.8rem;
+  }
+
+  .rag-telemetry-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+
+  .chip-tag {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.72rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--panel-alt);
+    border: 1px solid var(--border);
+  }
+
+  .chip-tag.route-single { border-color: var(--green); color: var(--green); }
+  .chip-tag.route-multi { border-color: var(--purple); color: var(--purple); }
+  .chip-tag.cache-hit { border-color: var(--amber); color: var(--amber); background: rgba(255, 180, 84, 0.08); }
+  .chip-tag.verified { border-color: var(--green); color: var(--green); }
+  .chip-tag.review { border-color: var(--red); color: var(--red); }
+
+  .citations-toggle {
+    background: none;
+    border: none;
+    color: var(--purple);
+    cursor: pointer;
+    font-size: 0.78rem;
+    padding: 4px 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .citations-toggle:hover {
+    color: #e4e9ee;
+  }
+
+  .sources-panel {
+    background: var(--panel-alt);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin-top: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .source-item {
+    border-left: 2px solid var(--purple);
+    padding-left: 8px;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+  }
+  .source-item strong {
+    color: var(--text);
+  }
+
+  /* Quick Suggestion Chips */
+  .quick-chips-wrapper {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .chip-btn {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+  }
+
+  .chip-btn:hover {
+    border-color: var(--purple);
+    color: var(--text);
+    background: var(--purple-bg);
+    box-shadow: 0 0 10px var(--purple-glow);
+  }
+
+  /* Input Controls */
+  .chat-input-container {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px 12px;
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+
+  .chat-input-container:focus-within {
+    border-color: var(--purple);
+    box-shadow: 0 0 16px var(--purple-glow);
+  }
+
+  .chat-textarea {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.92rem;
+    resize: none;
+    max-height: 140px;
+    min-height: 24px;
+    line-height: 1.4;
+    padding: 4px 0;
+  }
+
+  .chat-textarea::placeholder {
+    color: var(--text-dim);
+  }
+
+  .btn-send {
+    background: var(--royal-gradient);
+    border: none;
+    color: #0b0f14;
+    font-weight: bold;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: opacity 0.2s ease, transform 0.1s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .btn-send:hover {
+    opacity: 0.95;
+    transform: translateY(-1px);
+    box-shadow: 0 0 12px var(--purple-glow);
+  }
+
+  .btn-send:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  /* Typing Dots Animation */
+  .typing-dots {
+    display: inline-flex;
+    gap: 4px;
+    padding: 4px 8px;
+  }
+  .typing-dots span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--purple);
+    animation: typing 1.4s infinite ease-in-out both;
+  }
+  .typing-dots span:nth-child(1) { animation-delay: -0.32s; }
+  .typing-dots span:nth-child(2) { animation-delay: -0.16s; }
+  @keyframes typing {
+    0%, 80%, 100% { transform: scale(0); opacity: 0.3; }
+    40% { transform: scale(1); opacity: 1; }
+  }
+</style>
+</head>
+<body class="has-sidebar">
+  <div class="navbar" role="navigation" aria-label="Primary">
+    <div class="brand"><span class="dot"></span><span class="label">JOBSAILOR</span></div>
+    <nav>
+      <a href="/dashboard">Dashboard</a>
+      <a href="/reports">Reports</a>
+      <a href="/chat" class="active" style="color: var(--purple); font-weight: bold;">💬 Chat / RAG</a>
+      <a href="/credentials">Credentials</a>
+      <a href="/help">Help</a>
+      <a href="/settings">Settings</a>
+      <form method="post" action="/logout"><button class="logout-btn" type="submit" aria-label="Log out">Log out</button></form>
+    </nav>
+  </div>
+
+  <main>
+    <div class="chat-container">
+      <div class="chat-header">
+        <div class="chat-title-group">
+          <span class="royal-badge"><span class="dot"></span>Royal RAG Assistant</span>
+          <span id="rag-stats" class="rag-stats-pill">Loading index...</span>
+          <span id="budget-pill" class="rag-stats-pill" style="border-color:var(--purple-glow)">💰 -/-</span>
+        </div>
+        <div class="header-actions">
+          <button id="reindex-btn" class="btn-royal" title="Rebuild vector embeddings & BM25 indices">🔄 Re-index Resume</button>
+          <button id="clear-cache-btn" class="btn-royal" title="Clear L1/L2 semantic question cache">🗑 Clear Cache</button>
+        </div>
+      </div>
+
+      <div class="chat-messages" id="chat-messages">
+        <!-- Welcome message -->
+        <div class="msg-row assistant">
+          <div class="avatar assistant">👑</div>
+          <div class="msg-bubble">
+            <strong>Welcome to your Royal RAG Assistant.</strong><br>
+            I have indexed your resume facts, work history, and job application reports. You can query me about your career achievements, ask form-filling questions, or paste a Job Description for instant semantic gap analysis.
+            <div class="rag-inspector">
+              <div class="rag-telemetry-row">
+                <span class="chip-tag route-single">READY</span>
+                <span class="chip-tag verified">✓ Hybrid Dense + BM25</span>
+                <span class="chip-tag cache-hit">⚡ L1/L2 Cache Active</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick Suggestion Chips -->
+      <div class="quick-chips-wrapper">
+        <button class="chip-btn" onclick="sendQuickPrompt('Summarize my core technical skills and tools')">🛠 Core Technical Skills</button>
+        <button class="chip-btn" onclick="sendQuickPrompt('What are my key quantified revenue and leadership metrics?')">📈 Quantified Achievements</button>
+        <button class="chip-btn" onclick="sendQuickPrompt('What is my expected CTC, notice period, and location preference?')">💼 Preferences & CTC</button>
+        <button class="chip-btn" onclick="sendQuickPrompt('Why did my recent applications fail or succeed?')">📊 Application Audit History</button>
+        <button class="chip-btn" onclick="sendQuickPrompt('What is my highest qualification and university?')">🎓 Education & Degree</button>
+      </div>
+
+      <!-- Input Form -->
+      <div class="chat-input-container">
+        <textarea id="chat-input" class="chat-textarea" placeholder="Ask anything about your resume, career history, or paste a Job Description..." rows="1"></textarea>
+        <button id="send-btn" class="btn-send">
+          <span>Send</span>
+          <span>✦</span>
+        </button>
+      </div>
+    </div>
+  </main>
+
+  <script src="/static/assets/theme.js"></script>
+  <script src="/static/assets/toast.js"></script>
+  <script>
+    const chatMessages = document.getElementById('chat-messages');
+    const chatInput = document.getElementById('chat-input');
+    const sendBtn = document.getElementById('send-btn');
+    const ragStatsPill = document.getElementById('rag-stats');
+    const reindexBtn = document.getElementById('reindex-btn');
+    const clearCacheBtn = document.getElementById('clear-cache-btn');
+
+    // Auto-expand textarea height
+    chatInput.addEventListener('input', function() {
+      this.style.height = 'auto';
+      this.style.height = (this.scrollHeight) + 'px';
+      if(this.value.trim() === '') this.style.height = '24px';
+    });
+
+    chatInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
+
+    sendBtn.addEventListener('click', sendMessage);
+
+    async function loadStats() {
+      try {
+        const res = await fetch('/api/rag/stats', { credentials: 'same-origin' });
+        if (res.ok) {
+          const data = await res.json();
+          ragStatsPill.innerHTML = `● <strong>${data.chunks || 0}</strong> Chunks Indexed &nbsp;|&nbsp; ⚡ <strong>${data.qa_cached || 0}</strong> Cached Answers`;
+        }
+      } catch(e) {
+        ragStatsPill.textContent = 'RAG Active';
+      }
+    }
+
+    reindexBtn.addEventListener('click', async () => {
+      reindexBtn.disabled = true;
+      reindexBtn.textContent = '⏳ Indexing...';
+      try {
+        const res = await fetch('/api/rag/reindex', { method: 'POST', credentials: 'same-origin' });
+        const data = await res.json();
+        if (res.ok) {
+          showToast(`Re-indexed ${data.stats?.chunks || 0} chunks successfully!`, null);
+          loadStats();
+        } else {
+          showToast(data.detail || 'Reindex failed', null);
+        }
+      } catch(e) {
+        showToast(e.message, null);
+      } finally {
+        reindexBtn.disabled = false;
+        reindexBtn.textContent = '🔄 Re-index Resume';
+      }
+    });
+
+    clearCacheBtn.addEventListener('click', async () => {
+      try {
+        const res = await fetch('/api/rag/reindex', { method: 'POST', credentials: 'same-origin' });
+        if(res.ok) {
+          showToast('L1/L2 Cache Flushed & Ready', null);
+          loadStats();
+        }
+      } catch(e) {}
+    });
+
+    function sendQuickPrompt(text) {
+      chatInput.value = text;
+      chatInput.style.height = 'auto';
+      sendMessage();
+    }
+
+    function formatMarkdown(text) {
+      if (!text) return '';
+      let escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      // Bold
+      escaped = escaped.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      // Inline Code
+      escaped = escaped.replace(/`([^`]+)`/g, '<code class="mono" style="background:var(--panel-alt);padding:2px 5px;border-radius:4px;border:1px solid var(--border);color:var(--purple);">$1</code>');
+      // Line breaks
+      escaped = escaped.replace(/\n/g, '<br>');
+      return escaped;
+    }
+
+    async function sendMessage() {
+      const q = chatInput.value.trim();
+      if (!q) return;
+
+      // Add user bubble
+      appendMessage('user', q);
+      chatInput.value = '';
+      chatInput.style.height = '24px';
+      chatInput.focus();
+
+      // Show typing indicator
+      const typingId = appendTypingIndicator();
+      sendBtn.disabled = true;
+
+      try {
+        const res = await fetch('/api/rag/query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: q, scope: 'auto', use_cache: true, verify: true }),
+          credentials: 'same-origin'
+        });
+
+        removeTypingIndicator(typingId);
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          appendMessage('assistant', `⚠️ Error: ${err.detail || 'Failed to retrieve answer'}`);
+          return;
+        }
+
+        const data = await res.json();
+        appendAssistantRAGMessage(data);
+        loadStats();
+      } catch (err) {
+        removeTypingIndicator(typingId);
+        appendMessage('assistant', `⚠️ Network error: ${err.message}`);
+      } finally {
+        sendBtn.disabled = false;
+      }
+    }
+
+    function appendMessage(role, text) {
+      const row = document.createElement('div');
+      row.className = `msg-row ${role}`;
+      const avatar = role === 'user' ? '<div class="avatar user">👤</div>' : '<div class="avatar assistant">👑</div>';
+      row.innerHTML = `
+        ${avatar}
+        <div class="msg-bubble">${formatMarkdown(text)}</div>
+      `;
+      chatMessages.appendChild(row);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function appendAssistantRAGMessage(data) {
+      const row = document.createElement('div');
+      row.className = 'msg-row assistant';
+      
+      const verifiedTag = data.verified ? 
+        '<span class="chip-tag verified">✓ Grounded Facts</span>' : 
+        '<span class="chip-tag review">⚠ Review Needed</span>';
+
+      let citationsHtml = '';
+      if (data.chunks && data.chunks.length > 0) {
+        const uniqueChunks = data.chunks.slice(0, 3);
+        const sourceItems = uniqueChunks.map((c, i) => {
+          const title = c._parent?.title || c.title || c.category || `Source Chunk #${i+1}`;
+          const snippet = (c.content || '').slice(0, 160).replace(/\n/g, ' ');
+          return `
+            <div class="source-item">
+              <strong>${escapeHtml(title)}</strong>: ${escapeHtml(snippet)}...
+            </div>
+          `;
+        }).join('');
+
+        const uniqueId = 'sources_' + Math.random().toString(36).substr(2, 9);
+        citationsHtml = `
+          <button class="citations-toggle" onclick="toggleSources('${uniqueId}')">
+            <span>📚 View ${uniqueChunks.length} Source Citations</span> ▾
+          </button>
+          <div id="${uniqueId}" class="sources-panel" style="display:none">
+            ${sourceItems}
+          </div>
+        `;
+      }
+
+      const routeClass = data.route === 'SINGLE_DOC' ? 'route-single' : 'route-multi';
+      const cacheTier = data.cached === 'L1' ? '⚡ L1 Exact (<1ms)' : 
+                        data.cached === 'L2' ? '⚡ L2 Semantic (<5ms)' : 
+                        data.cached === 'direct' ? '⚡ Direct Shard (<1ms)' : 'L3 RAG Pipeline';
+
+      row.innerHTML = `
+        <div class="avatar assistant">👑</div>
+        <div class="msg-bubble">
+          <div>${formatMarkdown(data.answer)}</div>
+          <div class="rag-inspector">
+            <div class="rag-telemetry-row">
+              <span class="chip-tag ${routeClass}">${data.route || 'RAG'}</span>
+              <span class="chip-tag">${data.domain || 'resume'}</span>
+              <span class="chip-tag cache-hit">${cacheTier}</span>
+              <span class="chip-tag" style="color:var(--text-dim)">⏱ ${data.latency_ms || 1}ms</span>
+              ${verifiedTag}
+            </div>
+            ${citationsHtml}
+          </div>
+        </div>
+      `;
+      chatMessages.appendChild(row);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function toggleSources(id) {
+      const panel = document.getElementById(id);
+      if (panel) {
+        panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
+      }
+    }
+
+    function appendTypingIndicator() {
+      const id = 'typing_' + Date.now();
+      const row = document.createElement('div');
+      row.id = id;
+      row.className = 'msg-row assistant';
+      row.innerHTML = `
+        <div class="avatar assistant">👑</div>
+        <div class="msg-bubble">
+          <div class="typing-dots">
+            <span></span><span></span><span></span>
+          </div>
+        </div>
+      `;
+      chatMessages.appendChild(row);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      return id;
+    }
+
+    function removeTypingIndicator(id) {
+      const el = document.getElementById(id);
+      if (el) el.remove();
+    }
+
+    function escapeHtml(s) {
+      if(!s) return '';
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    async function loadHistory(){
+      // ponytail: today-only UTC day (matches server _persist_chat); limit 100, no tabs
+      try{
+        const day = new Date().toISOString().slice(0, 10);
+        const res = await fetch(`/api/rag/chats?day=${day}&limit=100`, { credentials: 'same-origin' });
+        if(!res.ok) return;
+        const j = await res.json();
+        for(const r of (j.chats || [])){
+          appendMessage('user', (r.query && r.query.raw) || '');
+          appendAssistantRAGMessage({answer: (r.generation && r.generation.answer) || '', route: (r.route && r.route.target) || '', domain: (r.route && r.route.domain) || '', cached: 'hit', verified: !!(r.generation && r.generation.verified), chunks: ((r.retrieval && r.retrieval.chunks) || []).map(c => ({title: c.title, content: c.content_snippet})), latency_ms: (r.generation && r.generation.latency_ms) || 1});
+        }
+      }catch(e){}
+    }
+    async function loadBudget(){
+      try{
+        const r=await fetch('/api/status',{credentials:'same-origin'}); if(!r.ok) return;
+        const s=await r.json(); const b=s.budgets||{}; const g=b.gemini||s.budget, rag=b.rag||{};
+        const pill=document.getElementById('budget-pill');
+        if(pill) pill.textContent=`💰 ${g.calls_used}/${g.daily_limit} gemini | ${rag.calls_used||0}/${rag.daily_limit||50} rag | ${g.day} ${g.timezone||''}`;
+        if(!s.timezone||!s.timezone.locked){
+          const w=document.createElement('div'); w.className='alert warn'; w.style.marginBottom='12px'; w.innerHTML=`⚠️ Timezone not locked — confirm in <a href="/settings">Settings</a>. Resets at midnight ${g.timezone}.`;
+          document.querySelector('.chat-container').prepend(w);
+        }
+      }catch(e){}
+    }
+    loadBudget();
+    // Initialize stats on load
+    loadStats();
+    loadHistory();
+  </script>
+</body>
+</html>

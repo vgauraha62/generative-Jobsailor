@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JobSailor — Settings</title><link rel="stylesheet" href="/static/assets/app.css?v=2">
+<script>try{if(localStorage.getItem('js_theme')!=='dark')document.documentElement.dataset.theme='light'}catch(e){}</script>
+</head>
+<body>
+<div class="navbar" role="navigation" aria-label="primary">
+  <div class="brand"><span class="dot"></span><span class="label">JOBSAILOR</span></div>
+  <nav><a href="/dashboard" aria-label="Dashboard">Dashboard</a><a href="/reports" aria-label="Reports">Reports</a><a href="/chat" style="color: var(--purple);" aria-label="Chat / RAG">💬 Chat / RAG</a><a href="/credentials" aria-label="Credentials">Credentials</a><a href="/help" aria-label="Help">Help</a><a href="/settings" class="active" aria-label="Settings">Settings</a>
+    <form method="post" action="/logout"><button class="logout-btn" type="submit" aria-label="Log out">Log out</button></form>
+  </nav>
+</div>
+<main>
+  <h1>Settings</h1>
+  <div class="card" id="tz-card">
+    <p class="label">LOCALE — TIMEZONE</p>
+    <div style="background:var(--amber);color:#000;padding:8px;border-radius:6px;margin:8px 0;font-size:0.85rem">⚠️ Warning: Timezone once confirmed <strong>CANNOT</strong> be changed by you. Confirm carefully (India → Asia/Kolkata). To change later, raise a ticket via HELP menu — only admin can change.</div>
+    <select id="tz" style="width:100%;padding:10px;border-radius:6px;border:1px solid var(--border);background:var(--panel-alt);color:var(--text)"></select>
+    <p id="tz-status" class="mono" style="font-size:0.85rem;color:var(--text-dim);margin-top:8px"></p>
+    <button id="tz-save" class="btn btn-primary" style="margin-top:8px" aria-label="Confirm timezone">Confirm & Lock Timezone</button>
+  </div>
+  <div class="card">
+    <p class="label">Security</p>
+    <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <button id="export-btn" class="btn" aria-label="Download All My Data">Download All My Data</button>
+      <p style="color:var(--text-dim);font-size:0.85rem">Export all reports, runs, and settings as ZIP.</p>
+      <hr style="border:none;border-top:1px solid var(--border);margin:8px 0">
+      <a id="delete-link" href="#" class="btn btn-outline-danger" aria-label="Delete Account" style="text-align:center;text-decoration:none">Delete Account</a>
+    </div>
+  </div>
+  <div id="delete-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);align-items:center;justify-content:center;z-index:20">
+    <div class="card" style="max-width:420px;width:90%">
+      <h2>Delete account?</h2>
+      <button id="export2" class="btn" style="width:100%;margin-bottom:12px" aria-label="Download All My Data">Download All My Data</button>
+      <button class="btn" data-opt="downgrade" style="width:100%;margin-bottom:6px" aria-label="Downgrade to Free">Downgrade to Free</button>
+      <button class="btn" data-opt="deactivate" style="width:100%;margin-bottom:6px" aria-label="Temporarily Deactivate for 30 Days">Temporarily Deactivate for 30 Days</button>
+      <button class="btn" data-opt="delete" style="width:100%;margin-bottom:12px;opacity:0.5" aria-label="Permanently Delete">Permanently Delete</button>
+      <div id="delete-confirm" style="display:none">
+        <p>To confirm, type <strong>DELETE</strong>:</p>
+        <input id="delete-input" type="text" placeholder="DELETE" aria-label="Type DELETE" style="width:100%;padding:10px;border-radius:6px;border:1px solid var(--border);background:var(--panel-alt);color:var(--text)">
+        <div id="err-delete" style="color:var(--red);font-size:0.85rem;min-height:16px"></div>
+        <p>Re-enter password:</p>
+        <input id="delete-pw" type="password" placeholder="Password" aria-label="Password" style="width:100%;padding:10px;border-radius:6px;border:1px solid var(--border);background:var(--panel-alt);color:var(--text)">
+        <div id="err-pw" style="color:var(--red);font-size:0.85rem;min-height:16px"></div>
+        <button id="final-delete" class="btn btn-outline-danger" disabled aria-label="Permanently Delete">Permanently Delete</button>
+        <button id="cancel-delete" class="btn" aria-label="Cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+  <div id="delete-result" style="display:none;margin-top:16px" class="alert success" role="alert"></div>
+</main>
+<nav class="bottom-tabs" aria-label="primary mobile"><a href="/dashboard">Dashboard</a><a href="/reports">Reports</a><a href="/help">Help</a><a href="/settings" class="active">Settings</a></nav>
+<a href="mailto:support@jobsaillor.com?subject=Support&body=settings" class="support-bubble" aria-label="Support">?</a>
+<script src="/static/assets/theme.js"></script>
+<script src="/static/assets/app.js"></script>
+<script>
+const TZ_LIST=["Asia/Kolkata","UTC","Asia/Dubai","Asia/Singapore","Asia/Tokyo","Europe/London","Europe/Berlin","America/New_York","America/Chicago","America/Denver","America/Los_Angeles","Australia/Sydney"];
+async function loadTZ(){
+  try{
+    const j=await apiGet('/api/timezone');
+    const sel=document.getElementById('tz'), st=document.getElementById('tz-status'), btn=document.getElementById('tz-save');
+    const detected=Intl.DateTimeFormat().resolvedOptions().timeZone;
+    let opts=TZ_LIST; if(detected && !opts.includes(detected)) opts=[detected,...opts];
+    sel.innerHTML=opts.map(t=>`<option value="${t}">${t}</option>`).join("");
+    sel.value=j.timezone||detected||"Asia/Kolkata";
+    if(j.locked){ sel.disabled=true; btn.disabled=true; btn.textContent="🔒 Locked"; st.textContent=`🔒 Locked: ${j.timezone} since ${j.locked_at||''} — contact admin via HELP > Raise Ticket to change.`; }
+    else { st.textContent=`Current: ${j.timezone} — Not yet locked. Please confirm.`; if(!j.timezone) sel.value=detected||"Asia/Kolkata"; }
+  }catch(e){ showToast(e.message, loadTZ); }
+}
+loadTZ();
+document.getElementById('tz-save').onclick=async()=>{
+  const b=document.getElementById('tz-save'); setProcessing(b,true);
+  try{
+    const tz=document.getElementById('tz').value;
+    if(!confirm(`Confirm timezone as ${tz}? This CANNOT be changed later by you. Only admin via HELP ticket can change. Continue?`)) return;
+    const res=await fetch('/api/timezone/confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({timezone:tz}),credentials:'same-origin'});
+    const j=await res.json(); if(!res.ok) throw new Error(j.detail||'Failed');
+    showToast('Timezone locked: '+j.timezone); loadTZ();
+  }catch(e){ showToast(e.message, ()=>document.getElementById('tz-save').click()); }
+  finally{ setProcessing(b,false); }
+};
+document.getElementById('export-btn').onclick=async()=>{ const b=document.getElementById('export-btn'); setProcessing(b,true); try{ window.location.href='/api/export'; } finally{ setProcessing(b,false);} };
+document.getElementById('export2').onclick=()=>document.getElementById('export-btn').click();
+const modal=document.getElementById('delete-modal'), link=document.getElementById('delete-link');
+link.onclick=e=>{e.preventDefault(); modal.style.display='flex';};
+modal.onclick=e=>{ if(e.target===modal) modal.style.display='none'; };
+document.getElementById('cancel-delete').onclick=()=>modal.style.display='none';
+document.querySelector('[data-opt="downgrade"]').onclick=()=>alert('Downgraded to Free (no billing)');
+document.querySelector('[data-opt="deactivate"]').onclick=()=>alert('Deactivated placeholder');
+document.querySelector('[data-opt="delete"]').onclick=()=>document.getElementById('delete-confirm').style.display='block';
+const delInput=document.getElementById('delete-input'), pwInput=document.getElementById('delete-pw'), finalBtn=document.getElementById('final-delete');
+function check(){ finalBtn.disabled = !(delInput.value==='DELETE' && pwInput.value.length>=8); }
+delInput.addEventListener('input', check); pwInput.addEventListener('input', check);
+finalBtn.onclick=async()=>{
+  if(delInput.value!=='DELETE'){ document.getElementById('err-delete').textContent='Type exactly DELETE'; return;}
+  setProcessing(finalBtn,true);
+  try{
+    const res=await fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({confirm:'DELETE',password:pwInput.value}),credentials:'same-origin'});
+    const j=await res.json().catch(()=>({}));
+    if(!res.ok) throw new Error(j.detail||'Failed');
+    modal.style.display='none';
+    const d=document.getElementById('delete-result'); d.style.display='block'; d.textContent='Account scheduled for deletion on '+j.purge_at+'. You have been logged out.';
+    setTimeout(()=>window.location.href='/login',1500);
+  }catch(e){ showToast(e.message, ()=>finalBtn.click()); document.getElementById('err-pw').textContent=e.message; }
+  finally{ setProcessing(finalBtn,false); check();}
+};
+</script>
+<script src="/static/assets/chat-widget.js"></script>
+</body>
+</html>

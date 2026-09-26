@@ -1,0 +1,13 @@
+# Runtime deps (bot + web control panel). System also needs: Firefox, geckodriver, tesseract binary.
+selenium==4.46.0
+google-genai==2.17.0
+python-dotenv==1.2.2
+fastapi==0.141.1
+uvicorn==0.52.1
+python-multipart==0.0.32
+bcrypt==5.0.0
+itsdangerous==2.2.0
+pillow==12.3.0
+pymupdf==1.28.2
+pytesseract==0.3.13
+pydantic==2.13.4
