@@ -19,6 +19,85 @@ class FakeEl:
     def find_elements(self, *a, **kw):
         return []
 
+    def is_displayed(self):
+        return getattr(self, "_shown", True)
+
+    def is_enabled(self):
+        return getattr(self, "_enabled", True)
+
+    def click(self):
+        pass
+
+    def send_keys(self, *a):
+        self.sent = getattr(self, "sent", []) + list(a)
+
+
+def _hidden_el():
+    el = FakeEl()
+    el._shown = False
+    return el
+
+
+def _disabled_el():
+    el = FakeEl()
+    el._enabled = False
+    return el
+
+
+def test_instruction_message_is_ignored():
+    aj, fd = _load_apply_jobs_with_mock()
+    aj._qa_cache = None
+    bots = [FakeEl("Kindly answer all recruiter's questions carefully")]
+    with patch.object(aj, "_chat_bot_messages", return_value=bots), \
+         patch.object(aj, "bard_flash_response") as bard, \
+         patch.object(aj, "_visible_enabled", return_value=[FakeEl()]):
+        assert aj.answer_text_question() is False
+        bard.assert_not_called()
+
+
+def test_actual_text_question_answered_and_sent():
+    aj, fd = _load_apply_jobs_with_mock()
+    aj._qa_cache = None
+    from selenium.webdriver.common.keys import Keys
+    inp = FakeEl()
+    bots = [FakeEl("What is your notice period?")]
+    with patch.object(aj, "_chat_bot_messages", return_value=bots), \
+         patch.object(aj, "_visible_enabled", return_value=[inp]), \
+         patch.object(aj, "bard_flash_response", return_value="30 days"), \
+         patch.object(aj, "load_candidate_profile", return_value={}), \
+         patch.object(time, "sleep", return_value=None):
+        assert aj.answer_text_question() is True
+        assert inp.sent and inp.sent[0] == "30 days" and Keys.ENTER in inp.sent
+
+
+def test_hidden_or_disabled_controls_not_actionable():
+    aj, fd = _load_apply_jobs_with_mock()
+    with patch.object(fd, "find_elements", return_value=[_hidden_el()]):
+        assert aj._has_actionable_chat_input() is False
+    with patch.object(fd, "find_elements", return_value=[_disabled_el()]):
+        assert aj._has_actionable_chat_input() is False
+    with patch.object(fd, "find_elements", return_value=[FakeEl()]):
+        assert aj._has_actionable_chat_input() is True
+
+
+def test_no_actionable_input_ends_as_review_with_screenshot():
+    aj, fd = _load_apply_jobs_with_mock()
+    with patch.object(aj, "answer_radio_questions", return_value=False), \
+         patch.object(aj, "answer_text_question", return_value=False), \
+         patch.object(aj, "answer_checkbox_questions", return_value=False), \
+         patch.object(aj, "_current_question_signature", return_value=""), \
+         patch.object(aj, "_has_actionable_chat_input", return_value=False), \
+         patch.object(aj, "_has_checkbox_input", return_value=False), \
+         patch.object(aj, "application_status", return_value=None), \
+         patch.object(aj, "the_success_markers", return_value=False), \
+         patch.object(aj, "attempt_final_submit", return_value=(False, "")), \
+         patch.object(aj, "_capture_visit_screenshot", return_value="reports/x.png"), \
+         patch.object(time, "sleep", return_value=None):
+        res = aj.run_chat_widget_loop()
+        assert res.status == "review", (res.status, res.reason)
+        assert "confirm" in (res.reason or "").lower() or "actionable" in (res.reason or "").lower()
+        assert res.screenshot == "reports/x.png"
+
 
 class FakeDriver:
     def __init__(self):
@@ -211,9 +290,9 @@ def test_run_chat_widget_loop_answers_all_before_applied():
          patch.object(aj, "_current_question_signature", side_effect=sig_mock), \
          patch.object(aj, "_has_actionable_chat_input", side_effect=lambda: call["i"] < len(seq) - 1), \
          patch.object(aj, "application_status", return_value=None), \
-         patch.object(aj, "the_success_markers", return_value=False), \
+         patch.object(aj, "the_success_markers", side_effect=lambda: call["i"] >= len(seq) - 1), \
          patch.object(time, "sleep", return_value=None):
         fd.current_url = "https://www.naukri.com/job-listings-xyz"
         res = aj.run_chat_widget_loop()
         assert res.status == "applied"
-        assert call["i"] == 3
+        assert call["i"] == 2  # site proof at i>=2 ends the loop; no answering after confirmation

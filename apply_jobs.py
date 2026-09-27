@@ -23,6 +23,7 @@ from selenium.common.exceptions import (
 from gemini_api import bard_flash_response, reset_job_counter, job_count as gemini_job_count, reset_curation_counter, curation_count
 from candidate_profile import load_candidate_profile, find_sentinels
 from config_loader import load_config
+from dev_limits import gemini_limit_bypass_enabled
 import os as _os
 _USER_ID = _os.environ.get("USER_ID")
 if _USER_ID:
@@ -132,6 +133,7 @@ if _USER_ID:
 from state import load_visited, save_visited, should_skip, mark_visited, load_budget, budget_ok, bucket_against_ledger, load_curation_budget, curation_budget_ok
 from reporting import write_capture_report, write_visit_report, write_manual_report, build_visit_summary, run_id, JobResult, visit_items, write_forms_report, forms_items, spillover_block
 from gemini_api import ModelOverloaded  # ponytail: halt signal re-raised through swallow-handlers
+from qa_cache import QACache, UnusableAnswer  # ponytail: per-user answers; job-abort signal like ModelOverloaded
 import time
 import csv
 import shutil
@@ -196,6 +198,7 @@ DAILY_CALL_LIMIT = GEMINI_CFG["daily_call_limit"]
 MAX_PAGES_PER_TYPE = SEARCH_CFG["max_pages_per_type"]
 _last_chat_qa = {}
 _chat_transcript_buf = []
+_qa_cache = None  # QACache built in main(); None = lookup/save skipped (tests, import-time)
 
 driver_path = shutil.which("geckodriver")
 binary = BROWSER_CFG["binary"] or shutil.which("firefox") or "/opt/firefox/firefox"
@@ -406,7 +409,7 @@ def _current_question_signature() -> str:
     except Exception:
         pass
     try:
-        radios = driver.find_elements(By.CSS_SELECTOR, ".ssrc__radio-btn-container")
+        radios = _visible_enabled(driver.find_elements(By.CSS_SELECTOR, ".ssrc__radio-btn-container"))
         if radios:
             labels = tuple(r.find_element(By.CSS_SELECTOR, "label").text.strip() for r in radios if r.find_element(By.CSS_SELECTOR, "label").text.strip())
             if labels:
@@ -420,10 +423,24 @@ def _current_question_signature() -> str:
     except (StaleElementReferenceException, NoSuchElementException):
         pass
     try:
-        bots = driver.find_elements(By.XPATH, "//li[contains(@class,'botItem')]//span")
+        checks = _visible_enabled(driver.find_elements(By.CSS_SELECTOR, "input[type='checkbox']"))
+        if checks:
+            labels = tuple(_input_label(c) for c in checks)
+            labels = tuple(l for l in labels if l)
+            if labels:
+                try:
+                    _q = driver.find_elements(By.XPATH, "//li[contains(@class,'botItem')]//span")
+                    _qt = _q[-1].text.strip() if _q else ""
+                except Exception:
+                    _qt = ""
+                return "check:" + _qt + "|" + "|".join(labels)
+    except (StaleElementReferenceException, NoSuchElementException):
+        pass
+    try:
+        bots = _chat_bot_messages()
         if bots:
             txt = bots[-1].text.strip()
-            if txt:
+            if txt and not _is_chat_instruction(txt):
                 return "text:" + txt
     except Exception:
         pass
@@ -437,18 +454,81 @@ def _current_question_signature() -> str:
     return ""
 
 
-def _has_actionable_chat_input() -> bool:
+_CHAT_INSTRUCTION_HINTS = (
+    "kindly answer all recruiter", "answer all recruiter", "recruiter's questions",
+    "recruiter’s questions", "please answer all", "thank you for your response",
+)
+
+
+def _is_chat_instruction(text: str) -> bool:
+    low = " ".join((text or "").lower().split())
+    return any(hint in low for hint in _CHAT_INSTRUCTION_HINTS)
+
+
+def _chat_bot_messages():
+    """Return bot messages from the application chat, tolerating pages without one."""
     try:
-        if driver.find_elements(By.CSS_SELECTOR, ".ssrc__radio-btn-container"):
+        return driver.find_elements(By.XPATH, "//li[contains(@class,'botItem')]//span")
+    except Exception:
+        return []
+
+
+def _visible_enabled(elements):
+    """Discard stale, hidden, and disabled controls before treating them as actionable."""
+    visible = []
+    for element in elements or []:
+        try:
+            is_displayed = getattr(element, "is_displayed", None)
+            is_enabled = getattr(element, "is_enabled", None)
+            if (is_displayed is None or is_displayed()) and (is_enabled is None or is_enabled()):
+                visible.append(element)
+        except Exception:
+            continue
+    return visible
+
+
+def _input_label(b) -> str:
+    """Best-effort label for a checkbox input: sibling, parent, then value."""
+    # ponytail: checkbox DOM unconfirmed live — sibling-first, value fallback, never raises
+    for xp in ("./following-sibling::*[1]", "./preceding-sibling::*[1]", ".."):
+        try:
+            t = (b.find_element(By.XPATH, xp).text or "").strip()
+            if t:
+                return t
+        except Exception:
+            pass
+    try:
+        return (b.get_attribute("value") or "").strip()
+    except Exception:
+        return ""
+
+
+def _has_radio_or_text() -> bool:
+    try:
+        radios = _visible_enabled(driver.find_elements(By.CSS_SELECTOR, ".ssrc__radio-btn-container"))
+        if radios:
             return True
     except Exception:
         pass
     try:
-        if driver.find_elements(By.CSS_SELECTOR, "[contenteditable='true'], div.textArea, textarea"):
+        inputs = _visible_enabled(driver.find_elements(By.CSS_SELECTOR, "[contenteditable='true'], div.textArea, textarea"))
+        if inputs:
             return True
     except Exception:
         pass
     return False
+
+
+def _has_checkbox_input() -> bool:
+    # ponytail: detected so checkbox rounds can't silently submit; answering them is a later slice
+    try:
+        return bool(_visible_enabled(driver.find_elements(By.CSS_SELECTOR, "input[type='checkbox']")))
+    except Exception:
+        return False
+
+
+def _has_actionable_chat_input() -> bool:
+    return _has_radio_or_text() or _has_checkbox_input()
 
 
 def _capture_visit_screenshot(tag: str, run_id_str: str = None) -> str | None:
@@ -569,11 +649,62 @@ def run_chat_widget_loop() -> JobResult:
     def _attach_transcript(res):
         try:
             res.chat_transcript = list(_chat_transcript_buf)
-            res.screenshots = [s for e in _chat_transcript_buf for s in [e.get("screenshot_after_save"), e.get("screenshot_new_q"), e.get("screenshot_success")] if s]
+            res.screenshots = [s for e in _chat_transcript_buf for s in [e.get("screenshot_after_save"), e.get("screenshot_new_q"), e.get("screenshot_success"), e.get("screenshot_submit")] if s]
+            if res.status in ("review", "failed") and not res.screenshots and not getattr(res, "screenshot", None):
+                ss = _capture_visit_screenshot("chat_unresolved", run_id())
+                if ss:
+                    res.screenshot = ss
+                    res.screenshots = [ss]
             res.screenshot = res.screenshots[0] if res.screenshots else getattr(res, "screenshot", None)
         except Exception:
             pass
         return res
+    def _submit_and_verify(sig_before, url_before):
+        """Click final submit once, record it, verify the site response."""
+        # ponytail: submit-once lives here so transcript + screenshots attach uniformly
+        clicked, label = attempt_final_submit()
+        if not clicked:
+            if label == "incomplete":
+                return _attach_transcript(_fail_result("review", reason="incomplete-information banner; not submitting", path="chat_widget"))
+            return None
+        try:
+            ss = _capture_chat_q_screenshot(len(_chat_transcript_buf) + 1, "submit", run_id())
+        except Exception:
+            ss = None
+        _chat_transcript_buf.append({"q_idx": len(_chat_transcript_buf) + 1, "type": "submit", "q": None,
+                                     "options": None, "answer": label, "provider": "bot",
+                                     "timestamp": datetime.now().isoformat(), "screenshot_submit": ss})
+        try:
+            outcome2 = _wait_for_next_state(sig_before, url_before)
+        except Exception:
+            outcome2 = "timeout"
+        if _has_actionable_chat_input():
+            return "CONTINUE"  # questions remain — keep answering regardless of interim status
+        if outcome2 == "failed_status":
+            return _attach_transcript(_fail_result("skipped", reason="apply rejected after submit", path="chat_widget"))
+        if application_status() == "applied" or the_success_markers():
+            res = _fail_result("applied", reason=f"submitted via {label}", path="chat_widget")
+            res.verified = "direct"
+            res.chat_transcript = list(_chat_transcript_buf)
+            res.screenshots = [s for e in _chat_transcript_buf for s in [e.get("screenshot_after_save"), e.get("screenshot_new_q"), e.get("screenshot_submit")] if s]
+            res.screenshot = res.screenshots[0] if res.screenshots else None
+            return res
+        if _has_actionable_chat_input():
+            return "CONTINUE"  # submit revealed more questions — keep answering
+        if _page_shows_incomplete():
+            return _attach_transcript(_fail_result("review", reason="incomplete-information banner after submit", path="chat_widget"))
+        return _attach_transcript(_fail_result("review", reason=f"submitted via {label}; no confirmation", path="chat_widget"))
+
+    def _confirm_answer(entry, qa):
+        """Persist an answer only after Naukri advances away from its question."""
+        if entry is not None:
+            entry["accepted"] = True
+        if _qa_cache is not None and qa and qa.get("q") and qa.get("answer"):
+            try:
+                _qa_cache.save(qa.get("type", "text"), qa["q"], qa.get("options"), qa["answer"],
+                               provider=qa.get("provider", "gemini"), run_id=_RUN_ID)
+            except Exception as exc:
+                print(f"[cache] save warn: {exc}")
     last_err = None  # (error_type, reason, traceback_str)
     answered_count = 0
     answered_texts: set = set()
@@ -581,9 +712,14 @@ def run_chat_widget_loop() -> JobResult:
         status = application_status()
         if status == "applied" or the_success_markers():
             if not _has_actionable_chat_input():
-                return _attach_transcript(_fail_result("applied", path="chat_widget"))
+                res = _fail_result("applied", path="chat_widget")
+                res.verified = "direct"
+                return _attach_transcript(res)
         if status == "failed":
-            return _attach_transcript(_fail_result("failed", reason="apply rejected by status header", path="chat_widget"))
+            if _has_actionable_chat_input():
+                pass  # ponytail: questions remain — answer first, re-check header after
+            else:
+                return _attach_transcript(_fail_result("failed", reason="apply rejected by status header", path="chat_widget"))
 
         url_before = driver.current_url
         sig_before = _current_question_signature()
@@ -596,7 +732,7 @@ def run_chat_widget_loop() -> JobResult:
             if answer_radio_questions(answered=answered_texts):
                 answered = True
         except Exception as e:
-            if isinstance(e, ModelOverloaded):
+            if isinstance(e, (ModelOverloaded, UnusableAnswer)):
                 raise
             last_err = (type(e).__name__, "radio step error", traceback.format_exc())
 
@@ -605,15 +741,24 @@ def run_chat_widget_loop() -> JobResult:
                 if answer_text_question(answered=answered_texts):
                     answered = True
             except Exception as e:
-                if isinstance(e, ModelOverloaded):
+                if isinstance(e, (ModelOverloaded, UnusableAnswer)):
                     raise
                 last_err = (type(e).__name__, "text step error", traceback.format_exc())
+
+        if not answered:
+            try:
+                if answer_checkbox_questions(answered=answered_texts):
+                    answered = True
+            except Exception as e:
+                if isinstance(e, (ModelOverloaded, UnusableAnswer)):
+                    raise
+                last_err = (type(e).__name__, "checkbox step error", traceback.format_exc())
 
         if not answered:
             if _current_question_signature() and _current_question_signature() != sig_before:
                 answered = True
             else:
-                # ponytail: one patience loop for slow renders; per-Q Save still advances
+                # ponytail: one patience loop for slow renders; answers only, submit happens once at the end
                 _waited = 0.0
                 while not answered and _waited < 10.0:
                     time.sleep(1.0)
@@ -625,30 +770,60 @@ def run_chat_widget_loop() -> JobResult:
                             answered = True
                             break
                     except Exception as e:
-                        if isinstance(e, ModelOverloaded):
+                        if isinstance(e, (ModelOverloaded, UnusableAnswer)):
                             raise
                         last_err = (type(e).__name__, "radio retry error", traceback.format_exc())
+                    try:
+                        if answer_checkbox_questions(answered=answered_texts):
+                            answered = True
+                            break
+                    except Exception as e:
+                        if isinstance(e, (ModelOverloaded, UnusableAnswer)):
+                            raise
+                        last_err = (type(e).__name__, "checkbox retry error", traceback.format_exc())
                     try:
                         if answer_text_question(answered=answered_texts):
                             answered = True
                             break
                     except Exception as e:
-                        if isinstance(e, ModelOverloaded):
+                        if isinstance(e, (ModelOverloaded, UnusableAnswer)):
                             raise
                         last_err = (type(e).__name__, "text retry error", traceback.format_exc())
                     if _current_question_signature() and _current_question_signature() != sig_before:
                         answered = True
                         break
                 if not answered:
-                    if not _has_actionable_chat_input() and driver.find_elements(By.XPATH, "//*[contains(translate(normalize-space(.),'THANK','thank'),'thank') and contains(translate(normalize-space(.),'RESPONSE','response'),'response')]"):
-                        return _attach_transcript(_fail_result("applied", path="chat_widget"))
+                    if _has_checkbox_input() and not _has_radio_or_text():
+                        return _attach_transcript(_fail_result("review", reason="checkbox questions unsupported", path="chat_widget"))
+                    if not _has_actionable_chat_input() and driver.find_elements(By.XPATH, "//*[contains(translate(normalize-space(.),'THANK','thank'),'thank') and contains(translate(normalize-space(.),'RESPONSE','response'),'response')]") and not _page_shows_incomplete():
+                        # ponytail: thank-you alone is not proof — submit first, unconfirmed stays review
+                        r = _submit_and_verify(sig_before, url_before)
+                        if r == "CONTINUE":
+                            continue
+                        if r is not None:
+                            return r
+                        return _attach_transcript(_fail_result("review", reason="thank-you without submit confirmation", path="chat_widget"))
+                    r = _submit_and_verify(sig_before, url_before)
+                    if r == "CONTINUE":
+                        continue
+                    if r is not None:
+                        return r
                     break
 
         if answered:
             answered_count += 1
-            if cur_question_text:
+            _recorded = False
+            try:
+                _aq = (_last_chat_qa or {}).get("q")
+                if _aq:
+                    answered_texts.add(_aq)  # ponytail: record what we answered, not the post-advance DOM
+                    _recorded = True
+            except Exception:
+                pass
+            if not _recorded and cur_question_text:
                 answered_texts.add(cur_question_text)
-            else:
+                _recorded = True
+            if not _recorded:
                 try:
                     bots = driver.find_elements(By.XPATH, "//li[contains(@class,'botItem')]//span")
                     if bots:
@@ -661,17 +836,22 @@ def run_chat_widget_loop() -> JobResult:
                     pass
             try:
                 rid = run_id()
-                ss_after = _capture_chat_q_screenshot(answered_count, "after_save", rid)
+                ss_after = _capture_chat_q_screenshot(answered_count, "after_answer", rid)
                 gem_before = getattr(__import__('gemini_api'), 'job_count', lambda: 0)() if 'gemini_api' in __import__('sys').modules else 0
                 qa = dict(_last_chat_qa) if _last_chat_qa else {"type": "unknown", "q": cur_question_text or sig_before, "answer": "unknown"}
-                entry = {"q_idx": answered_count, "type": qa.get("type"), "q": qa.get("q"), "options": qa.get("options"), "answer": qa.get("answer"), "provider": qa.get("provider", "gemini"), "gemini_calls_before": gem_before, "sig_before": sig_before, "screenshot_after_save": ss_after, "timestamp": datetime.now().isoformat()}
+                entry = {"q_idx": answered_count, "type": qa.get("type"), "q": qa.get("q"), "options": qa.get("options"), "answer": qa.get("answer"), "provider": qa.get("provider", "gemini"), "profile_hash": qa.get("profile_hash") or (_qa_cache.prof_hash if _qa_cache is not None else ""), "gemini_calls_before": gem_before, "sig_before": sig_before, "screenshot_after_save": ss_after, "timestamp": datetime.now().isoformat(), "accepted": False}
                 _chat_transcript_buf.append(entry)
                 _last_chat_qa = {}
             except Exception:
-                pass
+                entry = None
+                qa = None
+        else:
+            entry = None
+            qa = None
 
         outcome = _wait_for_next_state(sig_before, url_before)
         if outcome == "new_question":
+            _confirm_answer(entry, qa)
             try:
                 last = _chat_transcript_buf[-1] if _chat_transcript_buf else None
                 if last is not None:
@@ -682,8 +862,20 @@ def run_chat_widget_loop() -> JobResult:
                 pass
             continue
         if outcome == "success":
+            if not _page_shows_incomplete():
+                _confirm_answer(entry, qa)
             if _has_actionable_chat_input():
                 continue
+            if _page_shows_incomplete() and not (application_status() == "applied" or the_success_markers()):
+                return _attach_transcript(_fail_result("review", reason="incomplete-information banner; not submitting", path="chat_widget"))
+            if not (application_status() == "applied" or the_success_markers()):
+                # ponytail: thank-you alone is not proof — submit first, unconfirmed stays review
+                r = _submit_and_verify(sig_before, url_before)
+                if r == "CONTINUE":
+                    continue
+                if r is not None:
+                    return r
+                return _attach_transcript(_fail_result("review", reason="thank-you without submit confirmation", path="chat_widget"))
             try:
                 if _chat_transcript_buf:
                     ss_final = _capture_chat_q_screenshot(len(_chat_transcript_buf), "success", run_id())
@@ -691,13 +883,16 @@ def run_chat_widget_loop() -> JobResult:
             except Exception:
                 pass
             res = _fail_result("applied", path="chat_widget")
+            res.verified = "direct"
             res.chat_transcript = list(_chat_transcript_buf)
             res.screenshots = [s for e in _chat_transcript_buf for s in [e.get("screenshot_after_save"), e.get("screenshot_new_q")] if s]
             res.screenshot = res.screenshots[0] if res.screenshots else None
             return res
         if outcome == "navigated":
             if application_status() == "applied" or the_success_markers():
+                _confirm_answer(entry, qa)
                 res = _fail_result("applied", path="chat_widget")
+                res.verified = "direct"
                 res.chat_transcript = list(_chat_transcript_buf)
                 res.screenshots = [s for e in _chat_transcript_buf for s in [e.get("screenshot_after_save"), e.get("screenshot_new_q")] if s]
                 res.screenshot = res.screenshots[0] if res.screenshots else None
@@ -710,18 +905,34 @@ def run_chat_widget_loop() -> JobResult:
             time.sleep(1.0)
             sig_now = _current_question_signature()
             if sig_now and sig_now != sig_before and not sig_now.startswith("thank:"):
+                _confirm_answer(entry, qa)
                 continue
-            if not _has_actionable_chat_input() and driver.find_elements(By.XPATH, "//*[contains(translate(normalize-space(.),'THANK','thank'),'thank') and contains(translate(normalize-space(.),'RESPONSE','response'),'response')]"):
-                return _attach_transcript(_fail_result("applied", path="chat_widget"))
+            if not _has_actionable_chat_input() and driver.find_elements(By.XPATH, "//*[contains(translate(normalize-space(.),'THANK','thank'),'thank') and contains(translate(normalize-space(.),'RESPONSE','response'),'response')]") and not _page_shows_incomplete():
+                # ponytail: thank-you alone is not proof — submit first, unconfirmed stays review
+                r = _submit_and_verify(sig_before, url_before)
+                if r == "CONTINUE":
+                    continue
+                if r is not None:
+                    return r
+                return _attach_transcript(_fail_result("review", reason="thank-you without submit confirmation", path="chat_widget"))
+            if _has_checkbox_input() and not _has_radio_or_text():
+                return _attach_transcript(_fail_result("review", reason="checkbox questions unsupported", path="chat_widget"))
             if _has_actionable_chat_input():
                 continue
+            r = _submit_and_verify(sig_before, url_before)
+            if r == "CONTINUE":
+                continue
+            if r is not None:
+                return r
         last_err = last_err or (None, "next question did not render in time", None)
         break
 
     if last_err:
         etype, reason, tb = last_err
         return _attach_transcript(_fail_result("failed", reason=reason, error_type=etype, tb=tb, path="chat_widget"))
-    return _attach_transcript(_fail_result("failed", reason="no actionable chat input", path="chat_widget"))
+    # Apply may have succeeded without opening a surface, or the widget may still be rendering.
+    # Keep it unresolved for review instead of claiming a definite application failure.
+    return _attach_transcript(_fail_result("review", reason="no actionable chat input or submit confirmation", path="chat_widget"))
 
 
 def _verify_late_success(url: str) -> bool:
@@ -957,7 +1168,7 @@ def _process_job_inner(url: str, slug: str) -> JobResult:
         if surf == "none":
             print("[gate] no form or chat detected, skipping curation/upload")
             ss = _capture_visit_screenshot("no_surface", run_id())
-            r = _fail_result("failed", reason="no_form_or_chat", path="chat_widget")
+            r = _fail_result("review", reason="no_form_or_chat after Apply; outcome unconfirmed", path="chat_widget")
             if ss:
                 r.screenshot = ss
             return r
@@ -1023,6 +1234,9 @@ def _process_job_inner(url: str, slug: str) -> JobResult:
     # Chat flow failed or produced no questions; fall back to the full form only when appropriate.
     if chat.reason and "navigated" in chat.reason:
         return _attach_curation(chat)
+    if chat.status == "review":
+        # ponytail: submit-time verdicts (incomplete, unconfirmed) are terminal — never re-failed as form
+        return _attach_curation(chat)
     if surf_state in ("chat_widget", "both") and chat.reason in ("no actionable chat input", "next question did not render in time", "no_form_or_chat"):
         ss = _capture_visit_screenshot("chat_no_input", run_id())
         r = _fail_result("failed", reason=chat.reason or "no actionable chat input", path="chat_widget")
@@ -1049,7 +1263,7 @@ def _process_job_inner(url: str, slug: str) -> JobResult:
     try:
         answers = get_structured_answers(fields)
     except Exception as e:
-        if isinstance(e, ModelOverloaded):
+        if isinstance(e, (ModelOverloaded, UnusableAnswer)):
             raise
         ss = _capture_visit_screenshot("structured_answers_error")
         r = _fail_result("failed", reason="structured answers error", error_type=type(e).__name__, tb=traceback.format_exc(), path="full_form")
@@ -1065,8 +1279,10 @@ def _process_job_inner(url: str, slug: str) -> JobResult:
         return _attach_curation(r)
 
     _prov = _llm_provider()
+    _ph = _qa_cache.prof_hash if _qa_cache is not None else ""
     for _p in plan:
         _p["provider"] = _prov  # ponytail: whole-form = one Gemini call; rows share its provider
+        _p["profile_hash"] = _ph
 
     unanswered_required = [p["label"] for p in plan if p["required"] and not p["answered"]]
     if unanswered_required:
@@ -1100,6 +1316,7 @@ def _process_job_inner(url: str, slug: str) -> JobResult:
         return _attach_curation(r)
     if st == "applied":
         r = _fail_result("applied", path="full_form")
+        r.verified = "direct"
         r.form_plan = plan  # ponytail: answers ride the result into forms.json
         return _attach_curation(r)
     r = _fail_result("review", reason="submit returned review status", path="full_form")
@@ -1118,6 +1335,15 @@ def process_job(url: str, slug: str = "") -> JobResult:
         raise
     except ModelOverloaded:
         raise
+    except UnusableAnswer as e:
+        # ponytail: bad answer kills the job with its reason, never the run; keep prior answers
+        res = _fail_result("failed", reason=str(e)[:300], error_type="UnusableAnswer", path="chat_widget")
+        try:
+            res.chat_transcript = list(_chat_transcript_buf)
+            res.screenshots = [s for row in _chat_transcript_buf for s in (row.get("screenshot_after_save"), row.get("screenshot_new_q"), row.get("screenshot_success"), row.get("screenshot_submit")) if s]
+            res.screenshot = res.screenshots[0] if res.screenshots else _capture_visit_screenshot("unusable_answer", run_id())
+        except Exception:
+            pass
     except Exception as e:
         res = _fail_result("failed", reason="unhandled exception", error_type=type(e).__name__,
                            tb=traceback.format_exc(), path="chat_widget")
@@ -1157,12 +1383,14 @@ def _llm_provider() -> str:
 
 
 def answer_radio_questions(answered: set = None) -> bool:
-    radio_buttons = driver.find_elements(By.CSS_SELECTOR, ".ssrc__radio-btn-container")
+    radio_buttons = _visible_enabled(driver.find_elements(By.CSS_SELECTOR, ".ssrc__radio-btn-container"))
     if not radio_buttons:
         return False
 
-    q_els = driver.find_elements(By.XPATH, "//li[contains(@class, 'botItem')]//span")
+    q_els = _chat_bot_messages()
     question = q_els[-1].text if q_els else ""
+    if _is_chat_instruction(question):
+        return False
     if answered is not None and question and question in answered:
         return False
     print(f"[radio] Q: {question}")
@@ -1175,25 +1403,38 @@ def answer_radio_questions(answered: set = None) -> bool:
     options_str = "\n".join(options)
     print("[radio] options:\n" + options_str)
 
-    answer = bard_flash_response(
-        f"Candidate context (JSON):\n{json.dumps(load_candidate_profile(), indent=2)}\n\n"
-        f"Question: {question}\nOptions:\n{options_str}\n\n"
-        "Reply with ONLY the option number that best matches the candidate.",
-        APPLY_CFG["gemini_timeout"])
+    _hit = _qa_cache.find("radio", question, options) if _qa_cache is not None else None
+    if _hit is not None:
+        # ponytail: cached digit is positional; remap via option value in case the site reordered
+        from qa_cache import remap_radio as _remap
+        _re = _remap(_hit, options)
+        if _re is None:
+            _hit = None  # cached value gone from current options; fall through to Gemini
+    if _hit is not None:
+        answer = _re
+        print(f"[radio] cache hit ({_hit.get('_sim', 'exact')}) — skipping Gemini")
+        _hit_provider = "cache"
+    else:
+        answer = bard_flash_response(
+            f"Candidate context (JSON):\n{json.dumps(load_candidate_profile(), indent=2)}\n\n"
+            f"Question: {question}\nOptions:\n{options_str}\n\n"
+            "Reply with ONLY the option number that best matches the candidate.",
+            APPLY_CFG["gemini_timeout"])
+        _hit_provider = None
     if not answer or not answer.strip():
-        print("[radio] Gemini empty/timeout/429 — skipping (prefer skipped over NEEDS_REVIEW)")
-        return False
+        raise UnusableAnswer(question, "empty response")
+    if answer.strip() == "NEEDS_REVIEW":
+        raise UnusableAnswer(question, "NEEDS_REVIEW")
     answer = answer.strip()
     if not answer.isdigit() or int(answer) not in range(1, len(radio_buttons) + 1):
-        print(f"[radio] Gemini returned invalid option {answer!r} — skipping")
-        return False
+        raise UnusableAnswer(question, f"invalid option {answer!r}")
     global _last_chat_qa
-    _last_chat_qa = {"type": "radio", "q": question, "options": options, "answer": answer, "provider": _llm_provider()}
+    _last_chat_qa = {"type": "radio", "q": question, "options": options, "answer": answer, "provider": _hit_provider or _llm_provider()}
 
     # Re-query fresh handles after the API gap and retry on staleness once.
     for attempt in range(2):
         try:
-            fresh = driver.find_elements(By.CSS_SELECTOR, ".ssrc__radio-btn-container")
+            fresh = _visible_enabled(driver.find_elements(By.CSS_SELECTOR, ".ssrc__radio-btn-container"))
             target = fresh[int(answer) - 1].find_element(By.CSS_SELECTOR, "input")
             driver.execute_script("arguments[0].click();", target)
             break
@@ -1203,21 +1444,85 @@ def answer_radio_questions(answered: set = None) -> bool:
             time.sleep(TIMING_CFG["click_delay"])
     time.sleep(TIMING_CFG["click_delay"])
 
-    save_btn = WebDriverWait(driver, APPLY_TIMEOUT).until(
-        EC.element_to_be_clickable(
-            (By.XPATH, "//button[contains(normalize-space(.), 'Save') or "
-                       "contains(normalize-space(.), 'Save & Continue')]"))
-    )
-    driver.execute_script("arguments[0].click();", save_btn)
-    time.sleep(TIMING_CFG["save_delay"])
     if answered is not None and question:
         answered.add(question)
     return True
 
 
+_INCOMPLETE_HINTS = ("incomplete", "please complete", "missing information", "complete your application", "required information")
+
+
+def _page_shows_incomplete() -> bool:
+    # ponytail: an incomplete-information banner is work-remaining, never success
+    try:
+        body = driver.find_element(By.TAG_NAME, "body").text or ""
+    except Exception:
+        return False
+    low = body.lower()
+    return any(h in low for h in _INCOMPLETE_HINTS)
+
+
+def _submit_candidates():
+    """Final submit/save buttons. Question controls are answered elsewhere — never here."""
+    # Ponytail: choose a unique final action; message-send buttons are never final submit.
+    order = ("submit application", "submit", "save & continue", "save")
+
+    def _rank(b):
+        try:
+            t = (b.text or "").lower()
+        except Exception:
+            return 99
+        t = " ".join(t.split())
+        for i, k in enumerate(order):
+            if k in t:
+                if k == "save" and t not in ("save", "save application", "save & continue", "save and continue"):
+                    continue
+                return i
+        return 99
+
+    try:
+        btns = driver.find_elements(
+            By.XPATH,
+            "//button[contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'submit') "
+            "or contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'save')]")
+        vis = _visible_enabled(btns)
+        ranked = sorted(((_rank(b), b) for b in vis), key=lambda pair: pair[0])
+        if not ranked:
+            return []
+        best_rank = ranked[0][0]
+        best = [button for rank, button in ranked if rank == best_rank]
+        return best if len(best) == 1 else []
+    except Exception:
+        return []
+
+
+def attempt_final_submit():
+    """Click the final submit exactly once. Returns (clicked, label). Never clicks while questions remain."""
+    # ponytail: one finder, one click; unclear state returns uncleared, never clicks blind
+    if _has_actionable_chat_input():
+        return False, ""
+    cands = _submit_candidates()
+    if not cands:
+        return False, ""
+    if _page_shows_incomplete():
+        print("[submit] incomplete-information banner — not submitting, marking review")
+        return False, "incomplete"
+    b = cands[0]
+    try:
+        label = (b.text or "").strip()
+    except Exception:
+        label = ""
+    try:
+        driver.execute_script("arguments[0].click();", b)
+        time.sleep(TIMING_CFG["save_delay"])
+        return True, label or "submit"
+    except Exception:
+        return False, ""
+
+
 def answer_text_question(answered: set = None) -> bool:
     question = None
-    bots = driver.find_elements(By.XPATH, "//li[contains(@class,'botItem')]//span")
+    bots = _chat_bot_messages()
     if bots:
         for el in reversed(bots):
             txt = el.text.strip()
@@ -1245,39 +1550,138 @@ def answer_text_question(answered: set = None) -> bool:
         return False
     if answered is not None and question in answered:
         return False
+    if _is_chat_instruction(question):
+        print("[text] instruction/acknowledgment message — no answer requested")
+        return False
     print(f"[text] Q: {question}")
 
-    response = bard_flash_response(
-        f"Candidate context (JSON):\n{json.dumps(load_candidate_profile(), indent=2)}\n\n"
-        f"Question: {question}\n\n"
-        "Answer using ONLY the candidate profile. If the question is not covered "
-        "by the profile, reply literally NEEDS_REVIEW.",
-        APPLY_CFG["gemini_timeout"])
+    text_inputs = _visible_enabled(driver.find_elements(By.CSS_SELECTOR, "[contenteditable='true'], div.textArea, textarea"))
+    if not text_inputs:
+        return False  # ponytail: no text box, no LLM call (checkbox rounds reach here first)
+    _hit = _qa_cache.find("text", question, None) if _qa_cache is not None else None
+    if _hit is not None:
+        response = _hit["answer"]
+        print(f"[text] cache hit ({_hit.get('_sim', 'exact')}) — skipping Gemini")
+        _hit_provider = "cache"
+    else:
+        response = bard_flash_response(
+            f"Candidate context (JSON):\n{json.dumps(load_candidate_profile(), indent=2)}\n\n"
+            f"Question: {question}\n\n"
+            "Answer using ONLY the candidate profile. If the question is not covered "
+            "by the profile, reply literally NEEDS_REVIEW.",
+            APPLY_CFG["gemini_timeout"])
+        _hit_provider = None
     if not response or not response.strip():
-        print("[text] Gemini empty/timeout/429 — skipping (prefer skipped)")
-        return False
+        raise UnusableAnswer(question, "empty response")
     if response.strip() == "NEEDS_REVIEW":
-        print("[text] NEEDS_REVIEW — skipping (prefer skipped)")
-        return False
+        raise UnusableAnswer(question, "NEEDS_REVIEW")
     global _last_chat_qa
-    _last_chat_qa = {"type": "text", "q": question, "answer": response.strip(), "options": None, "provider": _llm_provider()}
-    input_field = driver.find_element(
-        By.CSS_SELECTOR, "[contenteditable='true'], div.textArea, textarea")
+    _last_chat_qa = {"type": "text", "q": question, "answer": response.strip(), "options": None, "provider": _hit_provider or _llm_provider()}
+    input_field = text_inputs[0]
     input_field.click()
     input_field.send_keys(response)
     time.sleep(TIMING_CFG["click_delay"])
 
-    # Chat widgets generally send on Enter; click Save fallback if it exists.
+    # Chat message send only; the final submit happens once, after all questions.
     input_field.send_keys(Keys.ENTER)
     time.sleep(TIMING_CFG["click_delay"])
-    try:
-        save_click = driver.find_element(
-            By.XPATH, "//button[contains(normalize-space(.), 'Save') or contains(normalize-space(.), 'Send')]")
-        driver.execute_script("arguments[0].click();", save_click)
-    except NoSuchElementException:
-        pass
-    time.sleep(TIMING_CFG["save_delay"])
     if answered is not None:
+        answered.add(question)
+    return True
+
+
+def answer_checkbox_questions(answered: set = None) -> bool:
+    """Answer one checkbox (tick) question like a radio. No save click here."""
+    # ponytail: radio mirror for tick boxes; multi-pick when the question says so
+    import re as _re
+    boxes = _visible_enabled(driver.find_elements(By.CSS_SELECTOR, "input[type='checkbox']"))
+    if not boxes:
+        return False
+
+    q_els = _chat_bot_messages()
+    question = q_els[-1].text if q_els else ""
+    if _is_chat_instruction(question):
+        return False
+    if answered is not None and question and question in answered:
+        return False
+    print(f"[check] Q: {question}")
+    _qlow = question.lower()
+    _multi = any(k in _qlow for k in ("select all", "choose all", "all that apply", "select multiple", "choose multiple", "tick all"))
+
+    options = []
+    for idx, box in enumerate(boxes, start=1):
+        label = _input_label(box)
+        try:
+            value = box.get_attribute("value")
+        except Exception:
+            value = ""
+        options.append(f"{idx}. {label} (Value: {value})")
+    options_str = "\n".join(options)
+    print("[check] options:\n" + options_str)
+
+    _hit = _qa_cache.find("checkbox", question, options) if _qa_cache is not None else None
+    if _hit is not None:
+        from qa_cache import remap_radio as _remap
+        if _multi:
+            _mapped = []
+            _digits = _re.findall(r"\d+", _hit.get("answer") or "")
+            for _d in _digits:
+                _m = _remap({"answer": _d, "options": _hit.get("options")}, options)
+                if _m is None:
+                    break
+                _mapped.append(_m)
+            if _digits and len(_mapped) == len(_digits):
+                answer = ",".join(_mapped)
+            else:
+                _hit = None  # cached values gone; fall through to Gemini
+        else:
+            _re = _remap(_hit, options)
+            if _re is None:
+                _hit = None  # cached value gone from current options; fall through to Gemini
+            else:
+                answer = _re
+    if _hit is not None:
+        print(f"[check] cache hit ({_hit.get('_sim', 'exact')}) — skipping Gemini")
+        _hit_provider = "cache"
+    else:
+        answer = bard_flash_response(
+            f"Candidate context (JSON):\n{json.dumps(load_candidate_profile(), indent=2)}\n\n"
+            f"Question: {question}\nOptions:\n{options_str}\n\n" +
+            ("Reply with ONLY the option numbers that apply, comma-separated (e.g. 1,3)."
+             if _multi else
+             "Reply with ONLY the option number that best matches the candidate."),
+            APPLY_CFG["gemini_timeout"])
+        _hit_provider = None
+    if not answer or not answer.strip():
+        raise UnusableAnswer(question, "empty response")
+    if answer.strip() == "NEEDS_REVIEW":
+        raise UnusableAnswer(question, "NEEDS_REVIEW")
+    if _multi:
+        _digits = _re.findall(r"\d+", answer)
+        _digits = [str(int(d)) for d in dict.fromkeys(_digits)]
+        if not _digits or any(int(d) not in range(1, len(boxes) + 1) for d in _digits):
+            raise UnusableAnswer(question, f"invalid options {answer!r}")
+        answer = ",".join(_digits)
+    else:
+        answer = answer.strip()
+        if not answer.isdigit() or int(answer) not in range(1, len(boxes) + 1):
+            raise UnusableAnswer(question, f"invalid option {answer!r}")
+    global _last_chat_qa
+    _last_chat_qa = {"type": "checkbox", "q": question, "options": options, "answer": answer, "provider": _hit_provider or _llm_provider()}
+
+    for _d in answer.split(","):
+        for attempt in range(2):
+            try:
+                fresh = _visible_enabled(driver.find_elements(By.CSS_SELECTOR, "input[type='checkbox']"))
+                driver.execute_script("arguments[0].click();", fresh[int(_d) - 1])
+                break
+            except (StaleElementReferenceException, NoSuchElementException, IndexError):
+                if attempt == 1:
+                    raise
+                time.sleep(TIMING_CFG["click_delay"])
+    time.sleep(TIMING_CFG["click_delay"])
+    time.sleep(TIMING_CFG["click_delay"])
+    if answered is not None and question:
         answered.add(question)
     return True
 
@@ -1494,6 +1898,19 @@ def main():
         raise SystemExit("refused: unresolved profile sentinels; "
                          "edit candidate_profile.json first.")
 
+    global _qa_cache
+    try:
+        # ponytail: seed from answered items + prior runs; hash-gated, per-user only
+        from qa_cache import load_seed as _qa_seed, load_file as _qa_file, profile_hash as _qa_ph
+        _ph = _qa_ph(profile)
+        _uid = int(_os.environ.get("USER_ID")) if _os.environ.get("USER_ID") else None
+        _qa_cache = QACache(uid=_uid, prof_hash=_ph)
+        _qa_cache.mem = {**_qa_file(_uid), **_qa_seed(REPORTS_CFG.get("dir", "reports"), _ph)}
+        print(f"[cache] seeded {len(_qa_cache.mem)} answers (uid={_uid})")
+    except Exception as e:
+        print(f"[cache] seed warn: {e}")
+        _qa_cache = None
+
     try:
         from gemini_api import health_check
         hk = health_check(timeout=5)
@@ -1562,11 +1979,12 @@ def main():
                     print(f"Reached global cap MAX_JOBS={MAX_JOBS}; stopping.")
                     break
                 budget = load_budget()
-                if not budget_ok(budget, DAILY_CALL_LIMIT) or (DRY_RUN and counts["applied"] >= 1):
+                over_budget = not budget_ok(budget, DAILY_CALL_LIMIT)
+                if (over_budget and not gemini_limit_bypass_enabled()) or (DRY_RUN and counts["applied"] >= 1):
                     # ponytail: sampling stop reuses budget break points; no new state
                     if DRY_RUN and counts["applied"] >= 1:
                         print("[dry] 1 applied — sampling stop.")
-                    else:
+                    elif over_budget:
                         budget_exhausted = True
                     break
                 if global_processed > 0 and global_processed % 20 == 0:

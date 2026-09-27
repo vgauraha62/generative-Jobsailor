@@ -130,6 +130,8 @@ async def run_status(request: Request = None):
 @router.post("")
 async def start_run(payload: dict, request: Request = None):
     cfg = _load_cfg()
+    from dev_limits import gemini_limit_bypass_enabled
+    dev_budget_bypass = gemini_limit_bypass_enabled()
     max_types = int(cfg.get("search", {}).get("max_run_types", 3))
     types = payload.get("types") or []
     raw_live = payload.get("live")
@@ -146,7 +148,7 @@ async def start_run(payload: dict, request: Request = None):
                 err = hk.get("error", "gemini health check failed")
                 if "unauth" in err.lower() or "api key" in err.lower() or "permission" in err.lower():
                     raise HTTPException(status_code=400, detail=f"Gemini API key invalid: {err}")
-                if "quota" in err.lower() or "resource_exhausted" in err.lower() or "429" in err:
+                if ("quota" in err.lower() or "resource_exhausted" in err.lower() or "429" in err) and not dev_budget_bypass:
                     raise HTTPException(status_code=429, detail=f"Gemini quota exhausted: {err}")
         except HTTPException:
             raise

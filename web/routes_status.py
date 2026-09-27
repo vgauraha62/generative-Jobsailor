@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Request
 import state
 import config_loader
 import candidate_profile
+from dev_limits import gemini_limit_bypass_enabled
 
 router = APIRouter(prefix="/api")
 
@@ -323,6 +324,7 @@ async def get_status(request: Request = None):
         urow = _g2(uid) if uid else None
     except: pass
     return {
+        "gemini_limit_bypass": gemini_limit_bypass_enabled(),
         "budget": {
             "day": budget["day"],
             "calls_used": budget["calls_used"],
@@ -456,7 +458,9 @@ async def get_report(kind: str, run_id: str, request: Request = None):
 async def get_config():
     """Current config.json, as-is. Nothing secret lives in here (the
     Gemini key stays in .env), so this is safe to return unfiltered."""
-    return config_loader.load_config()
+    cfg = config_loader.load_config()
+    from job_roles import JOB_ROLES
+    return {**cfg, "job_roles": JOB_ROLES}
 
 
 @router.get("/screenshots")

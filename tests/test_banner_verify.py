@@ -45,6 +45,8 @@ def test_slow_render_gets_second_look():
     ctx = _inner_common(aj, fd, ["none", "chat_widget"])
     with ctx["already"], ctx["jd"], ctx["click"], ctx["surf"], ctx["shot"], ctx["sleep"], \
          mock.patch.object(aj, "the_success_markers", return_value=False), \
+         mock.patch.object(aj, "answer_radio_questions", return_value=False), \
+         mock.patch.object(aj, "answer_text_question", return_value=False), \
          mock.patch.object(aj, "load_curation_budget", return_value={"day": "x", "calls_used": 99}), \
          mock.patch.object(aj, "curation_budget_ok", return_value=False), \
          mock.patch.object(aj, "_extract_with_retry", return_value=[]):

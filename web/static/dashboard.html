@@ -141,8 +141,11 @@
       `;
       const limitBanner=document.getElementById("limit-banner");
       if(pct>=85&&pct<100) limitBanner.innerHTML=`<div class="alert warn" role="alert">You have used ${pct}% of daily limit — consider upgrading. <span aria-hidden="true">⚠</span></div>`;
-      else if(pct>=100){ limitBanner.innerHTML=`<div class="alert warn" role="alert">Daily limit reached. <button class="btn" aria-label="Upgrade" onclick="window.location.href='/settings'">Upgrade</button></div>`; const rb=document.getElementById('run-btn'); if(rb) rb.disabled=true; }
+      else if(pct>=100 && !status.gemini_limit_bypass){ limitBanner.innerHTML=`<div class="alert warn" role="alert">Daily limit reached. <button class="btn" aria-label="Upgrade" onclick="window.location.href='/settings'">Upgrade</button></div>`; }
+      else if(status.gemini_limit_bypass){ limitBanner.innerHTML=`<div class="alert warn" role="status">Development mode: app Gemini daily limit bypass is enabled. Google's own API quota still applies.</div>`; }
       else limitBanner.innerHTML="";
+      const runButton=document.getElementById('run-btn');
+      if(runButton) runButton.disabled=pct>=100 && !status.gemini_limit_bypass;
       if(status.curation_budget){
         document.getElementById("threshold-slider").value=status.curation_budget.threshold;
         document.getElementById("threshold-value").textContent=status.curation_budget.threshold;
@@ -206,8 +209,9 @@
     async function initRunCard(status){
       const cfg=await apiGet("/api/config");
       const slugs=(cfg.search&&cfg.search.slugs)||[]; const maxTypes=(cfg.search&&cfg.search.max_run_types)||3;
+      const roleOptions=cfg.job_roles||slugs.map(s=>({label:s.replace(/-jobs$/,"").replace(/-/g," "),slug:s}));
       const chips=document.getElementById("type-chips");
-      chips.innerHTML=slugs.map(s=>{ const short=s.replace("-jobs",""); return `<label class="badge" style="cursor:pointer"><input type="checkbox" value="${short}" checked aria-label="${short}"> ${short}</label>`; }).join("");
+      chips.innerHTML=roleOptions.map(role=>{ const short=role.slug.replace(/-jobs$/,""); const checked=slugs.includes(role.slug)?"checked":""; return `<label class="badge" style="cursor:pointer"><input type="checkbox" value="${short}" ${checked} aria-label="${role.label}"> ${role.label}</label>`; }).join("");
       const liveToggle=document.getElementById("run-live-toggle");
       const stored=localStorage.getItem("jobsailor_live_toggle");
       let initialLive=stored!==null?stored==="true":!status.dry_run_default;

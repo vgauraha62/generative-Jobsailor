@@ -34,6 +34,7 @@ class JobResult:
     curation_calls_this_job: int = 0
     screenshot: str | None = None
     gemini_error: str | None = None
+    verified: str | None = None
 
 
 def _ensure_dir(directory: str):
@@ -89,20 +90,27 @@ def write_forms_report(directory: str, run_id_str: str, payload: dict) -> str:
 
 def forms_items(results, run_id_str=None) -> list:
     """Flat per-question rows (chat transcript + full-form plan) for forms_<run_id>.json."""
-    # ponytail: projection of captured answers, no new capture
+    # ponytail: projection of captured answers, no new capture; NEEDS_REVIEW never an answer
     items = []
     for r in results:
         base = {"run_id": run_id_str, "url": r.url, "job_type": r.job_type,
                 "status": r.status, "path_taken": r.path_taken}
         for e in (getattr(r, "chat_transcript", None) or []):
+            if e.get("type") == "submit" or (e.get("answer") or "").strip() in ("", "NEEDS_REVIEW"):
+                continue
             items.append({**base, "q_idx": e.get("q_idx"), "type": e.get("type"),
                           "q": e.get("q"), "options": e.get("options"),
                           "answer": e.get("answer"), "provider": e.get("provider", "gemini"),
+                          "profile_hash": e.get("profile_hash"),
+                          "accepted": e.get("accepted"),
                           "timestamp": e.get("timestamp")})
         for i, p in enumerate(getattr(r, "form_plan", None) or [], start=1):
+            if (p.get("answer") or "").strip() in ("", "NEEDS_REVIEW"):
+                continue
             items.append({**base, "q_idx": i, "type": "form:" + str(p.get("type")),
                           "q": p.get("label"), "options": None,
                           "answer": p.get("answer"), "provider": p.get("provider", "gemini"),
+                          "profile_hash": p.get("profile_hash"),
                           "timestamp": None})
     return items
 
@@ -119,6 +127,8 @@ def spillover_block(results) -> dict:
                 if e.get("timestamp") and (first_at is None or e["timestamp"] < first_at):
                     first_at = e["timestamp"]
         for p in (getattr(r, "form_plan", None) or []):
+            if not (p.get("answer") or "").strip() or (p.get("answer") or "").strip() == "NEEDS_REVIEW":
+                continue
             if p.get("provider") == "openrouter":
                 n_or += 1
     return {"happened": n_or > 0, "answers_via_openrouter": n_or, "first_spill_at": first_at}
@@ -168,6 +178,8 @@ def build_visit_summary(results) -> dict:
     histogram = {"0.0-0.2": 0, "0.2-0.4": 0, "0.4-0.6": 0, "0.6-0.8": 0, "0.8-1.0": 0}
     answers_gemini = 0
     answers_openrouter = 0
+    answers_cache = 0
+    applied_verification = {"direct": 0, "banner": 0, "revisit": 0, "history": 0, "unmarked": 0}
     for r in results:
         by_status[r.status] = by_status.get(r.status, 0) + 1
         by_job_type.setdefault(r.job_type, {})
@@ -176,6 +188,8 @@ def build_visit_summary(results) -> dict:
             error_counts[r.error_type] = error_counts.get(r.error_type, 0) + 1
         if r.status == "applied":
             durations.append(r.duration_seconds)
+            verification = getattr(r, "verified", None)
+            applied_verification[verification if verification in applied_verification else "unmarked"] += 1
         cs = getattr(r, "curation_score", None)
         if cs is not None:
             curation_scores.append(float(cs))
@@ -202,13 +216,21 @@ def build_visit_summary(results) -> dict:
         us = getattr(r, "upload_status", None) or "none"
         by_upload[us] = by_upload.get(us, 0) + 1
         for e in (getattr(r, "chat_transcript", None) or []):
+            if e.get("type") == "submit" or e.get("accepted") is False or not (e.get("answer") or "").strip() or (e.get("answer") or "").strip() == "NEEDS_REVIEW":
+                continue
             if e.get("provider") == "openrouter":
                 answers_openrouter += 1
+            elif e.get("provider") == "cache":
+                answers_cache += 1
             else:
                 answers_gemini += 1
         for p in (getattr(r, "form_plan", None) or []):
+            if not (p.get("answer") or "").strip() or (p.get("answer") or "").strip() == "NEEDS_REVIEW":
+                continue  # ponytail: verdicts/empties are never answers — same guard as chat loop
             if p.get("provider") == "openrouter":
                 answers_openrouter += 1
+            elif p.get("provider") == "cache":
+                answers_cache += 1
             else:
                 answers_gemini += 1
     curated_rate = (curated_applied / curated_total) if curated_total else 0.0
@@ -219,6 +241,8 @@ def build_visit_summary(results) -> dict:
         "gemini_calls_total": sum(r.gemini_calls_this_job for r in results),
         "answers_gemini": answers_gemini,
         "answers_openrouter": answers_openrouter,
+        "answers_cache": answers_cache,
+        "applied_verification": applied_verification,
         "curation_calls_total": sum(getattr(r, "curation_calls_this_job", 0) for r in results),
         "curation_performed": curation_performed,
         "curation_skipped_high_score": kept_total,

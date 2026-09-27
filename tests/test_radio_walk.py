@@ -50,16 +50,20 @@ def test_sig_distinguishes_same_label_radios():
     assert "Q1" in s1 and "Q2" in s2
 
 
-def _run_loop(aj, sig_seq, input_seq):
+def _run_loop(aj, sig_seq, input_seq, markers_seq=None):
     """Drive run_chat_widget_loop with scripted sig/input; stub answer fns like the real ones."""
     state = {"i": 0}
     qa_n = {"n": 0}
+    markers_seq = markers_seq or [False] * len(sig_seq)
 
     def sig():
         return sig_seq[min(state["i"], len(sig_seq) - 1)]
 
     def has_input():
         return input_seq[min(state["i"], len(input_seq) - 1)]
+
+    def markers():
+        return markers_seq[min(state["i"], len(markers_seq) - 1)]
 
     def fake_radio(answered=None):
         qa_n["n"] += 1
@@ -75,7 +79,7 @@ def _run_loop(aj, sig_seq, input_seq):
     with mock.patch.object(aj, "_current_question_signature", side_effect=sig), \
          mock.patch.object(aj, "_has_actionable_chat_input", side_effect=has_input), \
          mock.patch.object(aj, "application_status", return_value=None), \
-         mock.patch.object(aj, "the_success_markers", return_value=False), \
+         mock.patch.object(aj, "the_success_markers", side_effect=markers), \
          mock.patch.object(aj, "answer_radio_questions", side_effect=fake_radio), \
          mock.patch.object(aj, "answer_text_question", return_value=False), \
          mock.patch.object(_time, "sleep", side_effect=lambda s: state.__setitem__("i", state["i"] + 1)), \
@@ -88,7 +92,8 @@ def test_walk_q1_q2_same_labels_then_success():
     aj, _ = _load_aj()
     sigs = ["radio:Q1|Yes|No"] * 3 + ["radio:Q2|Yes|No"] * 3 + ["thank:Thank you for your response"] * 60
     inputs = [True] * 6 + [False] * 60
-    r = _run_loop(aj, sigs, inputs)
+    markers = [False] * 6 + [True] * 60  # site proof at the end — applied without needing a click
+    r = _run_loop(aj, sigs, inputs, markers)
     assert r.status == "applied", (r.status, r.reason)
     qs = [e["q"] for e in r.chat_transcript]
     assert qs == ["Q1", "Q2"], qs
